@@ -131,8 +131,9 @@ loader is the injection point every runtime mod uses).
   an icon, each of its rooms not built yet is built with the game's CreateActiveRoom (the call the map reveal makes on
   the client's side, here on the server's DRLG), a few a server frame; the game's own fill pass then fills them (no
   fill is called). Their objects are read, and those with an icon put on the automap as the landmarks put theirs on.
-  Placement is the game's rolls and rules; the order is the area's room list's. The server keeps a room it built for
-  the rest of the game (its DRLG frees none: the record), so these rooms end as the rooms walked past do. Approved
+  Placement is the game's rolls and rules; the order is the area's room list's. The server lets these rooms go as it
+  lets go every room no player is near (its unloader: the record), its units saved, and makes them again with the
+  room when a player comes near. Approved
   2026-10-03 for the experience multiplier (asked as "update the experience cheat to go higher, 1000 if possible.
   Also make sure the exp also works for the mercenary so they level up with me better"): the cap raised from 50 to
   1000, and one hook, on the server thread, the hireling experience award (0x44F480; the kill exp region's three
@@ -195,6 +196,56 @@ loader is the injection point every runtime mod uses).
   (0x109F4C0), on the thread that presents; it reads the swap chain at its record's +0 and calls nothing of the game's
   but its original, and while the panel's DXGI Present hooks are passed by (8 frames in a row with no present through
   them) the panel and the health bars are drawn into that swap chain before the original runs. Nothing written.
+  Approved 2026-11-02 for chests, unique, set and rune items on the map (asked as "Add a new cheat for making chests
+  visible on the map. Also make a cheats to show: unique, set, and rune as different cheat options", then "I want all
+  of these to show as icons only" and "it's important that each cheat has a unique icon for what it shows. I approve
+  sprite draws"; for the chests "a dropdown picker to select from super chests only, all chests, all openable"; then the
+  plugin's own icons for the items, "Approve"): no new hook. Two of the game's routines called: its sprite draw
+  (0x858510, the routine the automap's own icons and crosses go through), inside the existing hook on the automap's draw
+  of one unit, at the local player's own call, on the thread that draws the automap - a chest's icon from the
+  automap's own tiles (the sparkle chest 318 for a super or quest chest, the coin chest 319 for another, the coin chest
+  tinted grey for what else opens for loot) where the game draws an object's icon, and an item's icon (the plugin's own:
+  a gold star, a green gem, an orange rune stone) centred where the game would draw its cross, in legacy graphics the
+  automap's white cross tinted in the item's text color; and the game's sprite loader (0x858990), from the UI callback,
+  for the plugin's three icon files, registered with D2RLoader's Resource service at the plugin's load under
+  data/hd/global/ui/d2rloader/cabbycodes/mapicons/: loaded once a game is entered, and let go as it ends by the same
+  loader handed an empty name, which releases what the object holds and loads nothing (2026-11-02, after the first run's
+  exit put two assertion boxes in d2rloader.log, "s_loadedSpriteAssetPool.IsEmpty()" and "!m_allocCount": the icons
+  were still held when the game shut its UI down). The chests are read ahead with the room fill approved for the named
+  enemies (CreateActiveRoom on the server for an area's rooms, filled by the game's own pass), for every area but a
+  town, then reads of the server's objects (id, class, mode, place, and the sparkle byte that makes one a super chest,
+  unit +0xC8: Lower Kurast's are ordinary JungleChests with it, see the record: layout placeholders); the items on the
+  ground are read from the area's built rooms on the server thread when something dropped (the drop core's hook), an
+  area was entered or a switch changed, and the item notice's hook (approved for identify on pickup) says when the
+  pick-up routine took one off the ground. Nothing written. Asked 2026-11-03 for the named enemies ("update the existing show named npc
+  cheat to also be a dropdown to give options to show named, or show all enemies. Also add an option to show or hide
+  the names on the map which should only be for named enemies"): no new hook and no new routine called - every other
+  enemy gets the same marker draw at a smaller scale, from the same draw hook and the same server reads; the server's
+  side tells an enemy by MonStats Align (+0x87) and MonStats2 isAtt, read through the loader. Then "I want red dots instead of crosses"
+  (2026-11-03): the enemies' markers are a fourth plugin icon, a red dot (mapicons.h kEnemy, registered and loaded with
+  the item icons, drawn by the same sprite draw); then "the dots for normal enemies are too small. Instead of a size
+  difference maybe put an orange border around the named ones": one size, a fifth icon for the named (kNamedEnemy, the
+  same disc ringed in orange). The same day, "the enemies only show within a small proximity with the user instead of
+  for the whole area": the server lets a room no player is near go (its units saved) some 5 s after it is built, so the
+  later reads of an area (entered again, a switch changed) saw only the rooms near the character and took every other
+  mark away; now a read takes away only marks in the rooms it went over, and an area is read in full again (its rooms
+  built again by the approved fill, the game making their saved units again) when a switch asks for more than its last
+  full read brought. No new hook and no new call. And the map's icons are let go as the game's window closes (its
+  WM_CLOSE, in the overlay's window subclass), the same sprite loader with an empty name.
+  Approved 2026-11-03, after a customer on D2R Reimagined 3.1.0 had the map's switches greyed ("sites: automap: draw
+  one unit (marker and name) NOT FOUND"; Joshua: "go ahead and fix these hooks like you mentioned"). Reimagined's
+  loader edition bundles 36 plugins, Pyre's among them: the loot filter hooks the automap's draw of one unit (0xD76E0)
+  as it loads, Controller QOL Updates the two Show Items key routines, and Gem Bag UI checks the item notice's bytes
+  before every withdrawal and deposit (CheckExpectedBytes: the live bytes). Three changes:
+  - the map's hook moves to the marker decision (0xD78F0), which the unit draw asks first for every unit, with the
+    view in rdi (a thunk hands it on, the return address checked): same thread, same calls inside, after the game's
+    decision and before it draws that unit's own marker. The unit draw is read, never hooked;
+  - a routine another plugin's hook has taken (the loader's 5-byte jump over its entry, to code outside the image) is
+    found by its signature less those five bytes ("its entry is another plugin's hook (a jump to <module>+0x..)"),
+    read and called through that hook, never hooked: `entry_bytes` refuses bytes that are no longer the signature's;
+  - the item notice is hooked only once identify on pickup or a map item switch (uniques, sets, runes) is on, at the
+    worker's bind or later from the watchdog (the loader writes the original's pointer before it enables a hook), and
+    stays until the game is closed. Nothing else changes.
 - **Nothing looks at every frame for what an event announces, and no thread of the game writes a log line**
   (Joshua, 2026-09-28: "things that run every frame ... a game hook we could watch instead or event based
   functionality"). A piece of the UI callback waits for what the loader or the game says happened (a lifecycle
@@ -241,9 +292,10 @@ src/hooks_game.*      the loader-tracked hooks: tick, damage (multiplier, pets, 
                       the automatic affix picker (loot), item creation (the unit seed), the two curse steps, the vendor payment, a town
                       portal's cast, town end and use, a death's wake, the client's portal trip, the client's NPC
                       menu, the cube's product routine, the item free and the socket contents' free, the protected-
-                      stat test (god mode), the item notice (identify on pickup), the AI dispatcher, the enemy test
+                      stat test (god mode), the item notice (identify on pickup; a pick-up for the map's items), the
+                      AI dispatcher, the enemy test
                       and the kept target's getter (passive pets), the killself timer (permanent revives), the
-                      automap's draw of one unit (named enemies on the map), the requirement test (ignore item
+                      automap's marker decision (enemies, chests and items on the map), the requirement test (ignore item
                       requirements), a hit's resistance and the client's mod loop (no enemy immunities), a monster's
                       mod add, the rollers' mod test and the run of a monster's mods' makers (no enemy affixes), the
                       game's present routine (the panel's way past an overlay that took DXGI's Present); the item
@@ -329,7 +381,7 @@ src/mapmarks.*        named enemies, landmarks and area names at exits on the ma
                       pass (its own preset units: the objects' icons and the waypoint's floor tiles put on the automap
                       by the game's own routines, the super uniques' and bosses' spawn spots noted, the warps' tiles;
                       its warp links and its edges with other areas' rooms, walked over its collision map, for the
-                      exits), and the hook on the automap's draw of one unit (a named enemy's red cross and name, its
+                      exits), and the hook on the automap's marker decision (a named enemy's red cross and name, its
                       mark kept where it was last drawn, the spawn spots, the exits' names of the player's area); the
                       named enemies the server has made in an area entered (roomfill.cpp hands them over, server
                       thread), named as the client names them, marked at the automap's next draw; the rules (the
@@ -338,9 +390,26 @@ src/mapmarks.*        named enemies, landmarks and area names at exits on the ma
 src/roomfill.*        the shrines the game rolls, for the landmarks, and the named enemies: an area entered (server
                       thread, the tick), its rooms built for the game's own fill pass to fill, a few a frame; then the
                       objects in them read and handed to mapmarks, which puts those with an icon on the automap (UI
-                      thread), and the monsters, whose named ones it marks; each area once a game (the landmarks: only
-                      those whose object groups can roll an object with an icon; the named enemies: every area but a
-                      town, its monsters read again each time it is entered)
+                      thread), and the monsters, whose named ones it marks; an area's full read as it is first entered
+                      and again only when a switch asks for more (the landmarks: only areas whose object groups can roll
+                      an object with an icon; the enemies and the chests: every area but a town; none of them in a level
+                      whose record keeps no units as its rooms are let go), every other read from the rooms the server
+                      has built and filled now (it lets the others go), a mark outside them kept; the chests'
+                      objects (id, class, mode, place) handed to maploot, and the items on the ground of the area the
+                      character is in read when something dropped, an area was entered or a switch changed
+src/maploot.*         chests, unique, set and rune items on the map, icons only: the Objects rows (what opens for loot:
+                      super chests, quest chests, chests, the rest) and the runes among the Items rows (game thread, the
+                      tick), the server's reads handed over by roomfill, the client's objects and items the automap's
+                      pass hands the hook (opened, on the ground), the pick-up's notice; drawn at the local player's own
+                      call with the game's sprite draw (the automap's chest tiles where it draws an object's icon, the
+                      plugin's item icons centred where it draws a cross); the plugin's icons registered with the loader
+                      and loaded by the game's sprite loader; what the game throws away as it lets a room go (the
+                      classes' Restore, the LevelDefs rows) drawn only while the client has it; the rules (the chest
+                      rule, the picker, what the game keeps of a room it lets go, where a cell and a cross go) in the
+                      header (tests/test_maploot.cpp)
+src/mapicons.h        the plugin's icons for the map (a gold star, a green gem, an orange rune stone; the enemies' red
+                      dot, ringed in orange for a named one) painted as RGBA,
+                      and the game's HD sprite file format they are registered in (tests/test_maploot.cpp)
 src/remember.*        the automap and the two Show Items keys kept between games: read while playing (when a key,
                       a button or a panel says so), put back at a load by pressing the keys through the key-action
                       table (UI thread, no hook); what a cinematic of the game's does to the automap not recorded,
@@ -563,6 +632,15 @@ Launch: `scripts/d2r-loader.sh` (umu-run, Battle.net prefix, Proton verb `run`),
   1,891 pairs of lines, none closer than 4 ms, half of them 8 or more): nothing that is timed may count it
   (`log_spent_us`), nothing that happens per item may log without a limit, and a thread of the game hands its
   lines to the writer thread (see What runs when).
+- Other plugins' hooks (read in D2RCore 1.3.1, 2026-11-03). `InstallInlineHook` (0x47D960) is D2RCore's MinHook:
+  `MH_CreateHook`, then the trampoline written to the plugin's `original` (0x47DBCB) before `MH_EnableHook`
+  (0x47DBD2), so a hook can go in while the game runs (no call meets a null original). A second hook on an entry is
+  refused (ALREADY_CREATED): no chaining. The hook writes a 5-byte `jmp rel32` to a relay beside the image (`jmp
+  [rip+0]` and the detour's address) and leaves every later byte as it was. `CheckExpectedBytes` (0x47CE20 ->
+  0x47F2A0) memcmps a guarded copy of the live bytes: any hook makes a check over an entry fail. What other plugins
+  hook first is therefore found (sites.cpp `behind_a_hook`) but never hooked here; D2R Reimagined 3.1.0's bundle (36
+  plugins, read 2026-11-03): Pyre's loot filter 0xD76E0, Controller QOL Updates 0xC66A0 / 0xC6E90, Gem Bag UI's check
+  over 0x535F60 (see Rules).
 
 ## Reverse-engineering record (D2R 3.3.93847; RVAs, never used as fixed offsets)
 
@@ -765,7 +843,7 @@ Launch: `scripts/d2r-loader.sh` (umu-run, Battle.net prefix, Proton verb `run`),
 | socket contents free | 0x48FA40 / 0x535E60 | (game, item): the item's inventory (0x34A360) to 0x535E60 (game, inventory): the cursor item and each item taken out (0x389820 -> 0x38BA30, which also takes the item's stats off its owner's, 0x2F8290) and freed (0x48FAA0). 7 callers: an item's own free, the product routine's Clear Sockets (0x5270FA) and others. Hooked: infinite cube ingredients (acts only on the product routine's call, which returns to 0x5270FF) |
 | quest reward giver | 0x517530 | (game, player, item code, level, quality, at the feet) -> the item or 0; 11 callers, all quest code. The item made (0x43D530, mode 4), then into the inventory: the grid of page 0 (0x34A410 (player, page, bank not classic): page 0 the class's grid), the player's inventory (0x34A360), a free spot (0x3865B0 (inventory, item, grid, int32* x, int32* y, page)), the place {0 stored, the page, x \| y << 16, 0} (0x382E10), the inventory's move (0x471500 (player, places, ids, 1, 0) -> al), the client told (0x535F60 flags 1, command 2), identified (0x46E8C0), and when D2RCore's IsCharmUsable (`.maho` 0x3E2B61C, D2RCore export 1054, its 0x816850) says the item counts where it lies, the player's items worked out again (0x470C90 (game, player, 0, 0)). With no room and its last argument set, at the feet: flag 0x4000 off (0x36D8F0), page 0xFF (0x36DE20), body location 0 (0x36D730), mode 3 (0x34E5F0), x and y 0 (0x34E210 / 0x34E280), the player's place (0x34A040: {int32 x, y}) and room (0x34B440), a free spot near it (0x43DE10 (game, room, at, out, 1) -> its room), the item put there (0x43DD00 (game, player, item, room, x, y): the room's lists, mode 3, the drop time, the clients told 0x535C60, the quests 0x5154E0); else freed (0x43EC10). The drop request (0x17, 0x4BD8F0) drops a cursor item the same way. Read (its calls): infinite cube ingredients |
 | inventory transactions | 0x472590 / 0x471500 | the player's items (and its pets') copied into a layout (0x473210), changed, checked (0x46E050) and applied (0x470CA0), not while the player has state 0xBA or 7. 0x472590 (player, places checked, places taken out, their ids, counts, flag) takes items out (and checks that the others are where the client says); 0x471500 (player, places, ids, count, flag) -> al puts items at places (an item on the body, in the belt or in the grid has what it gives counted, 0x475E00; the quests told, 0x515400). A place: {int32 mode (0 stored, 4 the cursor), page (0xFF none), x \| y << 16, body location}; 0x382E30 makes the cursor's, 0x382D20 an item's own. Called (0x471500): infinite cube ingredients |
-| item notice | 0x535F60 | (game, player, item, flags, command, mode, page, body location, x \| y << 16): the item's flags (data +0x18, 0x2E9 cleared first), its command flags (0x36D830), mode, page, body location and place set for the packet (0x536410 to every client that sees the player), then put back. Commands: 2 an item added (the cube's products, a quest reward), 4 gone (the cube's items at a transmute, with flags 0x20), 0x80 / 0x200 / 0x2000 / 0x40 a pick-up into the grid, the body, the belt, the cursor (0x471950). What a client is sent (0x536410 (player, item, 0, client)) goes by the command flags first (0x40: to the owner's client 0x47D540 -> 0x479CD0, packet 0x9C; 2 or 0x80: 0x479820, packet 0x9D action 4; ...); with none, an item with flag 0x100 (broken) gets packet 0x7D (0x47EF00), and one with flag 1 (the identify routine's update) the update 0x479E50 (packet 0x9D, action 0x14) when it is stored (the owner's client, and others in some states), worn (everyone) or in the belt (the owner's), **nothing in any other mode: an item on the cursor (4) is not updated**. The item packets (0x9C, 0x9D) carry the whole item, written by D2RCore's SerializeItem (`.maho` 0x3E2B6A0, its 0x82FE80); the game's own writer 0x37D140 branches on item flag 0x10 (identified) in several places. 124 callers; D2RCore's routine table names it too (.data 0x6FFDA8). Called: infinite cube ingredients. Hooked: identify on pickup (acts only on the pick-up's call, which returns to 0x471E6E) |
+| item notice | 0x535F60 | (game, player, item, flags, command, mode, page, body location, x \| y << 16): the item's flags (data +0x18, 0x2E9 cleared first), its command flags (0x36D830), mode, page, body location and place set for the packet (0x536410 to every client that sees the player), then put back. Commands: 2 an item added (the cube's products, a quest reward), 4 gone (the cube's items at a transmute, with flags 0x20), 0x80 / 0x200 / 0x2000 / 0x40 a pick-up into the grid, the body, the belt, the cursor (0x471950). What a client is sent (0x536410 (player, item, 0, client)) goes by the command flags first (0x40: to the owner's client 0x47D540 -> 0x479CD0, packet 0x9C; 2 or 0x80: 0x479820, packet 0x9D action 4; ...); with none, an item with flag 0x100 (broken) gets packet 0x7D (0x47EF00), and one with flag 1 (the identify routine's update) the update 0x479E50 (packet 0x9D, action 0x14) when it is stored (the owner's client, and others in some states), worn (everyone) or in the belt (the owner's), **nothing in any other mode: an item on the cursor (4) is not updated**. The item packets (0x9C, 0x9D) carry the whole item, written by D2RCore's SerializeItem (`.maho` 0x3E2B6A0, its 0x82FE80); the game's own writer 0x37D140 branches on item flag 0x10 (identified) in several places. 124 callers; D2RCore's routine table names it too (.data 0x6FFDA8). Called: infinite cube ingredients. Hooked: identify on pickup (acts only on the pick-up's call, which returns to 0x471E6E) and the map's items picked up; only once one of those switches is on (Pyre's Gem Bag UI, bundled with D2R Reimagined, runs CheckExpectedBytes over this routine's whole body before every withdrawal and deposit) |
 | item pick-up | 0x471950 | (player, item id, to the inventory, reach, path test, into the cube) -> al: the item by its id among the units of the rooms near the player, the path to it free (0x350550 (player, item, 0x804) = 0) when asked, the item selectable (0x3500E0: unit flag 2), nothing on the player's cursor (0x388A70), within reach (0x325140), on the ground (mode 3, body location 0, page 0xFF); the clients told it left the ground (0x535D50: packet 0x0A), its footprint and room let go (0x348B00, 0x38EFE0). Gold (type 4): its amount to the player (0x475C90), the pile freed, 1. Else a place: to the inventory, a stack it merges into (0x4759E0: the item freed, 1), the body for an item the player can wear there (0x36B6A0, which asks the identified flag first: an unidentified item never), the belt (0x373E40 / 0x373D70 / 0x3862D0), else the grid of page 0 (0x34A410 / 0x3865B0), and with no room back on the ground (0x43DD00), event 0x18, 0; into the cube (the last argument) the grid of page 3; else the cursor (0x382E30). Then the inventory's move (0x471500; refused: back on the ground, event 0x14, 0), and last the notice (the call at 0x471E69, back at 0x471E6E): flags 0, the command by the place's mode (0 stored 0x80, 1 the body 0x200, 2 the belt 0x2000, else the cursor 0x40); 1. Callers: the request 0x16 (0x4B9DF0, 17 bytes: +1 the item's id, +5 / +9 where it lies, +0xD to the inventory, else the cursor; reach 4, the path tested), the request 0x5F (0x4BB600, 25 bytes: straight into the Horadric Cube, the cube's id and a spot in it checked first), Telekinesis (0x554880, its do function: to the inventory, reach 0x32, no path test), four routines among the debug commands' (0x40F670, 0x411280, 0x415E20, 0x4170B0); not D2RCore. The server's packet table 0x1D2A790 has a pointer an opcode (0x17 the drop 0x4BD8F0). Read (its notice's return address): identify on pickup |
 | item identified | 0x46E8C0 | (game, player, item, u8 the player's own) -> nothing. An item with the identified flag (0x10 at item data +0x18, the test 0x36E2D0) is left alone; else the flag set (0x36D8F0), a stored item that D2RCore's IsCharmUsable (`.maho` 0x3E2B61C) says counts where it lies has its stats added (0x475140 (bank, item, player, 0)) and the player's items worked out again (0x470CA0, 0x34DBE0 (player, 1)), item flag 0x4000 cleared, the clients told (0x535F60 flags 1, command 0: the update, sent for a stored, worn or belt item and not for one on the cursor), 0x34DBE0 (player, 1), unit event 6 (0x491960 (player, 6, player)), and a drop's set or unique item (flag 0x10000000) recorded: with the fourth argument, every player of the game (0x424970 -> 0x490D00 over game +0x2230, players in state 7 or 0xBA left out, 0x4260B0 each: in a game of type 2 or 3, Game +0x101, any; in another only one with 0x43CC70 (its client's +0x18, the item) at most 8), then the item's flags 0x10000000 / 0x20000000 cleared (0x3751C0); without it the player's client alone (0x4247D0). Callers: an Identify scroll's use callback 0x57EC30 (1), Cain's identify-all 0x53C2B0 (1: the stored items of page 0, and of page 3 with its last argument; none with an item on the cursor), the quest reward giver 0x517710 (0), the buy handler 0x53E6AD (0), a console command 0x4103F0 (0). 0x46EA70 (the item service handler's: the flag and a charm's stats, no notice) sets the flag too. Called: identify on pickup |
 | Chronicle of a player | 0x347440 | (player) -> its Chronicle: the player data (unit +0x10) + 0x220, after asserts that the unit is a player with data. 11 callers (the item found below, the console's fills, the save, the client's panel). Read (its offset): Chronicle drops |
@@ -798,8 +876,8 @@ Launch: `scripts/d2r-loader.sh` (umu-run, Battle.net prefix, Proton verb `run`),
 | killself's users | 0x55E7E0 / 0x556560 / 0x5710C0 / 0x584480 / 0x5A8750 | each adds mod 21 (0x4995E0) and its event (type 7, the mod its parameter) at the game's frame + a length. Revive (srvdofunc 58, 0x55E7E0): the corpse (0x48FE20) through 0x55A510, 0x55EDB0 and 0x55F8E0, its life (stats 7 and 6) and level, the owner (0x4A5800 (game, pet, owner id, owner type)), the unit to go to (0x5971B0), the AI's think event (type 2) 15 frames on, alignment 2 (0x48E600), the kept target cleared, unit flag 0x80000000 (0x34E190), state 0x60 revive (0x3354C0), then the skill's calc2 (Skills row +0x194, 0x3B5160: 4500 frames) above 0 -> killself and its event, then the pet registration 0x4FEB00 (game, owner, pet, the row's pet type +0x112 (a byte, below 0 none), the petmax calc +0x114). Decoy (srvdofunc 15, 0x556560: calc2 ln12, 250 frames and 125 more a level). The shadows (srvdofunc 49, 0x5710C0): only with a length (Skills row +0x80, auralencalc), none in 3.3. Reanimate As (ItemStatCost item_reanimate, itemevent kill, itemeventfunc 31 0x584320 in the item event table 0x238E5C0, which hands 0x584480 to 0x588550 as a callback): state 0x60, killself at frame + 1500, an owner but no pet registration, so in no pet list; Tomb Reaver and the Faith runeword in 3.3. 0x5A8750 (its callers 0x5A80C0 .. 0x5A85A0): monsters it spawns, killself at a random time. Read |
 | pet lists | 0x4FF3B0 / 0x4FFD30 / 0x5013F0 / 0x501550 / 0x500D80 / 0x501BC0 | a player's data (0x34B240, which asserts on anything else) +0x98: the pet lists, {entries, ...}; an entry 0x20 bytes a pet type (0x5013F0 (bank, lists, type): +0x00 the first node, +0x08 count, +0x0C max, +0x10 a group record; the number of types is the PetType rows', data tables +0x12E0); a node 0x20 bytes: +0x00 flags, +0x04 the unit's id, +0x18 the next. The lookup 0x4FF3B0 (player, id) -> the type whose list has the id, 0 none (types 1 up). The removal 0x4FFD30 (game, owner, id, kill): the lookup first (0 and kill: the unit killed by id, 0x500FB0), the node unlinked, the clients told (0x490D00), the unit killed (kill, 0x500FB0) or its flag 0x80000000 cleared. The registration 0x4FEB00 -> 0x501550 (game, owner, pet, type, max): the other types of its group out, the type's max set (0x501830), then 0x500D80: at the max the list is trimmed from its head (0x501BC0: 0x4FFD30 with kill), the new node appended at its tail, so the oldest gives way. PetType rows (pettype.txt order): 0 none, 1 single, 2 valkyrie, 3 golem, 4 skeleton, 5 skeletonmage, 6 revive, 7 hireable, 8 dopplezon ... 21 binddemon; a Skills row's +0x112 names its pets' (the loader's compiled rows, tests/test_revive.cpp). Called (the lookup): permanent revives |
 | automap: the units' pass | 0xD2600 | (draw args...): the automap panel's draw (its one caller 0x14E3480): the view made (0xD1940), a clip pushed (0x79D920; popped 0x79B6B0 at the end), the active layer's lists drawn (0xD6F10: floor +0x08, walls +0x30, units' icons +0x58, +0x80), then for each room of the player's room's near list (0x2EFDE0: ActiveRoom +0x00, count +0x40; the room itself is in it, as the unit name getter's skip of it shows) each unit of the room (ActiveRoom +0xA8, next 0x34B4A0) to the unit draw below, then the party members the client has no unit of (marker 1, names). Read |
-| automap: draw one unit | 0xD76E0 | (unit, view): the marker decision (0xD78F0), the party option (0x2A2CF98: markers 1 and 4 only with it on), the unit's pixels (0x34AF60 / 0x34AFB0: its path's +0x08 / +0x0C, any unit) through the transform 0xD4910 (view, out, x \| y << 32 pixels) -> out (x \| y << 32 on the screen: view +0x28 / +0x2C origin, +0x10 / +0x14 the centre and +0x30 / +0x34 the scale, the pixels / 10 plus (1, -3)), inside the view's rectangle (+0x18 x, +0x1C y, +0x20 width, +0x24 height), the marker 0xD6DB0 (point, marker 0..7, float scale = view +0x38), then with the names option (0x2A2CF9C, "AutoMap Party Names") the name by its kind: 0 / 1 / 2 a player's (0x34B240 through 0xD6AA0, colors 2 / 1), 3 the owner's, 4 the client's unit name (0x9A1B0) in color 4 through the name draw 0xD6B20 (UTF-8, point, scale, color: centred, the font's height above), 5 the string 0xCF3 (the stash). Hooked: named enemies on the map |
-| automap: the marker decision | 0xD78F0 | (unit, &marker, &name kind) -> whether drawn: a player: the local one 0, the party 1 (name 0), another 5 (name 1), a dead one in state 7 marker 2; a monster (not dead, not 0x34F8D0): an NPC row (MonStats flags byte +0x3D & 2: interact) marker 6 with its name (kind 4); a pet: 3 yours, 4 the party's, 5 another's with its owner's name; under the reveal-all byte (0x2A2ADD4) every other monster marker 5 (class 0x216 6), no name; objects: a town portal (59) marker 7, a permanent one (60) too but in levels 111, 112, 117, 125..127, the stash (267) only its name (5). The sprite "AUTOMAP/Units" (hd/global/ui/automap/units.sprite: 8 frames of 70 x 36, crosses): 0 blue, 1 green, 2 magenta, 3 slate, 4 dark green, 5 red, 6 white, 7 yellow. D2RCore lists it (and the reveal) among the routines it binds, and calls neither. Read |
+| automap: draw one unit | 0xD76E0 | (unit, view): the marker decision (0xD78F0), the party option (0x2A2CF98: markers 1 and 4 only with it on), the unit's pixels (0x34AF60 / 0x34AFB0: its path's +0x08 / +0x0C, any unit) through the transform 0xD4910 (view, out, x \| y << 32 pixels) -> out (x \| y << 32 on the screen: view +0x28 / +0x2C origin, +0x10 / +0x14 the centre and +0x30 / +0x34 the scale, the pixels / 10 plus (1, -3)), inside the view's rectangle (+0x18 x, +0x1C y, +0x20 width, +0x24 height), the marker 0xD6DB0 (point, marker 0..7, float scale = view +0x38), then with the names option (0x2A2CF9C, "AutoMap Party Names") the name by its kind: 0 / 1 / 2 a player's (0x34B240 through 0xD6AA0, colors 2 / 1), 3 the owner's, 4 the client's unit name (0x9A1B0) in color 4 through the name draw 0xD6B20 (UTF-8, point, scale, color: centred, the font's height above), 5 the string 0xCF3 (the stash). One caller (the units' pass, 0xD27E7). Read: enemies, chests and items on the map (its marker decision is hooked: other plugins hook this one, MapSense and Pyre's loot filter, D2R Reimagined's, at its 5-byte first instruction) |
+| automap: the marker decision | 0xD78F0 | (unit, &marker, &name kind) -> whether drawn: a player: the local one 0, the party 1 (name 0), another 5 (name 1), a dead one in state 7 marker 2; a monster (not dead, not 0x34F8D0): an NPC row (MonStats flags byte +0x3D & 2: interact) marker 6 with its name (kind 4); a pet: 3 yours, 4 the party's, 5 another's with its owner's name; under the reveal-all byte (0x2A2ADD4) every other monster marker 5 (class 0x216 6), no name; objects: a town portal (59) marker 7, a permanent one (60) too but in levels 111, 112, 117, 125..127, the stash (267) only its name (5). The sprite "AUTOMAP/Units" (hd/global/ui/automap/units.sprite: 8 frames of 70 x 36, crosses): 0 blue, 1 green, 2 magenta, 3 slate, 4 dark green, 5 red, 6 white, 7 yellow. D2RCore lists it (and the reveal) among the routines it binds, and calls neither. One caller, the unit draw (0xD76FA, returning to 0xD76FF), which holds the view in rdi and the unit in rbp around the call. Its prologue (push rbx, rsi, rdi; sub rsp, 60h) is 8 bytes, nothing relative, no branch back into it. Hooked (2026-11-03, a thunk hands on rdi; the return address is checked): enemies, chests and items on the map |
 | automap: reveal a room | 0xD6550 | (u8 bank, ActiveRoom, force, layer owner): the floor tiles (0x2EFB70 (room, &count): ActiveRoom +0x08, its +0x20 tiles, +0x28 count; 0x48 bytes a tile, +0x18 flags) each not flag 8, and seen (0x20000), the reveal-all byte or force, to the per-tile add onto the owner's +0x08; the walls (0x2EFDF0) onto +0x30; then a tail jump to its unit pass 0xD6680 (bank, owner +0x58): each unit of the room drawn on the screen already (unit flag 0x10000000, 0x349C60; set by the world's unit draw 0x1CC3B0 when it drew the unit) and not on the map yet (0x20000000, 0x349C20; set by 0x34DFD0), or all under the reveal-all byte: a monster by its MonStats2 row's cell (+0x118: in 3.3 only barricadetower's, 1258), an object by its Objects row's (0x38FD00 (bank, class), +0x164: 148 classes in 3.3, shrines 310, wells 309, waypoints 307, quest objects ...) with three rules: the stash (267, cell 319) only where the act of the room's level (`.maho` 0x3E2B5C8) is 2 or 3, the sewer stairs (366) only in mode 2, the valley waypoint object (402) only in level 74; the unit cell add 0xD52B0 (unit, cell, list): the unit's pixels / 10 plus (1, -3) as the key {u16 0, u16 cell, int32 x, int32 y}, the list insert 0xD1460 (list, {node, bool} out, key): a red-black tree that keeps a key once (0xD4B70 finds the place), nodes 0x30 bytes from the game's allocator. Called (the insert): landmarks on the map |
 | automap: a tile's cell | 0xD5160 / 0x32BDF0 | the per-tile add (u8 bank, tile, DRLG room, list): a tile on the map already (flag 0x40000) is left, else the flag set, the level type (0x3269B0: the level record's +0x34), the tile's graphics record's type +0x14, style +0x18 and sequence +0x1C (0x1460210 / 0x1460190 / 0x1460150) to the lookup 0x32BDF0, and a cell other than -1 put on the list at the tile's place (room +0x60 / +0x64 plus the tile's +0x08 / +0x0C, tiles to pixels 0x334EF0, / 10, +0x18 to y when the tile's +0x28 is 0x10 or more), key tag 0, through the list insert. The lookup: records {data, count} at 0x2A9A8C8, 0x20 bytes (+0 level type, +4 tile type, +8 style (0xFF any), +9 / +0xA the first and last sequence (0xFF at +9 any), +0xC cells, +0x1C how many), by level type the range [first, last) at 0x2A9A8E0 (int32 pairs); the first that fits; with a count of 1 or more one cell picked by the automap's own stream (0x2372A40, stepped every time), else the first. automap.txt's "Waypoint" rows (Acts 1..4: 19, one cell, 307) are a waypoint's floor tiles; Act 5's waypoints and the Arcane Sanctuary's are objects with the icon 307. Called (the per-tile add, for a tile the table gives the waypoint's cell; the table read, not queried): landmarks on the map |
 | a room's preset units | 0x3DE0E0 / 0x3DF600 / 0x3DBB60 | CreateActiveRoom's preset step (u8 bank, DRLG room), for a preset room (+0x74 == 2) whose flag bit 25 is clear: the room's +0x40 -> +0x08 is its preset part; when its DS1 (+0x10) is not loaded (0x3DCF10) the units are made (0x3DF600 (bank, part, the room's seed +0x30)): each of the DS1's (+0x98, next +0x10; type +0x20, class +0x04) copied (0x3DBB60: 0x30 bytes, type +0x20, class +0x04, x +0x08 and y +0x24 the DS1's plus the room's subtiles (+0x18 / +0x1C x 5), a path +0x18) and linked at the part's +0x58 by +0x10; some object classes (0xC4, 0x105 a half, 0x245 a quarter) and the layout's random monster places (0x21..0x23 past the super uniques) kept by the room's seed; a monster's class is a MonStats row below the table's count, then a super unique's row (count + index; the SuperUniques count 0x3971E0: data tables +0x1080). Then bit 25 set. Level 2's preset rooms of types 4..7 get a monster unit of their own (0x360BF0). The outdoor shrines and waypoints are preset rooms (D2RCore's PlaceOutdoorShrines / PlaceOutdoorWaypoint place lvlprest records, 0x32C360); the shrines and wells of objgroup.txt are made by the server when it first fills a room (0x4042A0 -> 0x503790, as a player comes near; the game fills a far room only for a town portal's other end), in no layout: every area whose levels.txt ObjGrp names a group with them (3.3: Act 3's jungle (31 Jungle Wells, 43 jungle shrines), Kurast (43, 76) and Travincal (61, 62), Act 4's (46), Act 5's (99 .. 106, 111 .. 115), every dungeon's); Act 1's and Act 2's outdoor groups have none (rogue corpses, chests, rocks, jugs). **These are the part's units, not yet the room's**: CreateActiveRoom's build step then moves the ones that stand in the room into the room's own list (next row), so after a build the part keeps only other rooms' units. Read: landmarks, named enemies (until 2026-10-02 the part's list was read after the build, and most rooms' units never came) |
@@ -810,10 +888,12 @@ Launch: `scripts/d2r-loader.sh` (umu-run, Battle.net prefix, Proton verb `run`),
 | a warp tile's preset unit | 0x3F4670 | (bank, DRLG room, tile x, y, tile flags, orientation 0xB right else left): the record for the area, the slot in the tile's flags (>> 0x14 & 0x3F) and the direction; a unit of type 5 put on the room's list by the room preset add, its class the record's id (+0x2C), at the tile less the room's tile x and y, times five, plus the record's offsets. Read: area names at exits (a type 5 preset unit with a link whose record has its id is the warp's tile) |
 | collision map | 0x366250 / 0x2EFB30 | (room, x, y, mask) -> the flags at a subtile (0x27 when no room has it): the room that holds the point (0x38DFB0: 0x2F0680 on the ActiveRoom's subtiles +0x80 .. +0x8C, else its near rooms 0x2EFDE0), its collision map (0x2EFB30: ActiveRoom +0x38) {+0 x, +4 y, +8 width, +0x0C height (subtiles), +0x10 / +0x14 tiles, +0x20 u16 flags, row by row}. The bits (D2's): 1 a wall, 2 sight, 4 missiles, 8 a player does not cross, 0x20 no floor, 0x400 an object, 0x800 a door, 0x1000 a unit; the game places a player with the mask 0x1C09 (0x491CA0, 0x2EF8B0). Read: area names at exits (walkable: neither 1 nor 8) |
 | the sewer stairs, stairs | 0x5E9DA0 / 0x5A11A0 / 0x590160 | object operate functions 44 (Act 3's sewer stairs, class 366: only in mode 2, open, then 0x5A11A0: the player warped (0x491FF0) through the tile unit (type 5) in the stairs' room) and 47 (the "stair" objects 194 / 195: opened, then through the room's tile unit too). The lever (class 367, OperateFn 45) has an icon of its own (cell 304). Act 3's Sewers Level 1 (92) names no vis slot for Level 2 (93): its four are the Bazaar's and Upper Kurast's (warps 58 / 59); the way down is the stairs over warp 60 ("Act 3 Sewer Down", NoInteract). Read: landmarks (the stairs put on ahead) |
-| server: the fill pass | 0x408670 / 0x406550 | the server's frame (0x406550: the frame counter, each act's rooms near its players (0x352410, 0x351DF0), then 0x408670, the events 0x48B5C0, D2RCore's step, ..., every 11 frames each act's level free 0x2EFFF0) runs the fill pass once: for each act of the game (game +0x190, the data tables' +0x108 acts), while the act's +0x84 says rooms were added (cleared, 0x2F0400), every room of its list (head +0x18, 0x192B20; next ActiveRoom +0xB0, 0x2EFC50) down to the head of the walk before: D2RCore's PopulateRoomSpecialMonsters (`.maho` 0x3E2B5C2), then for a room not filled (ActiveRoom +0x54 & 1, 0x2F0600) its presets (0x48F190), random monsters and saved units (0x503790), object groups (0x510F00) and terror step (0x50ACF0), the bit set (0x2F04E0), and +0x54 \| 2 (0x2F0440). A room built goes on its act's list: CreateActiveRoom's ActiveRoom maker 0x326480 calls D2RCore's AllocateActiveRoom (`.maho` 0x3E2B5BC, D2RCore 0x80E000), whose original 0x2EF340 allocates 0xB8 bytes, seeds +0xA0 from the DRLG room's stepped seed, links the room at the act's head (+0xB0 the old head) and sets the act's +0x84. So a room the plugin builds is filled by this pass. Checked (signature, the steps and the bit): rooms filled ahead |
+| server: the fill pass | 0x408670 / 0x406550 | the server's frame (0x406550: the frame counter, each act's rooms near its players (0x352410, 0x351DF0), then 0x408670, the events 0x48B5C0, D2RCore's step, ..., every 11 frames each act's level free 0x2EFFF0) runs the fill pass once: for each act of the game (game +0x190, the data tables' +0x108 acts), while the act's +0x84 says rooms were added (cleared, 0x2F0400), every room of its list (head +0x18, 0x192B20; next ActiveRoom +0xB0, 0x2EFC50) down to the head of the walk before: D2RCore's PopulateRoomSpecialMonsters (`.maho` 0x3E2B5C2), then for a room not filled (ActiveRoom +0x54 & 1, 0x2F0600) its presets (0x48F190), random monsters and saved units (0x503790), object groups (0x510F00) and terror step (0x50ACF0), the bit set (0x2F04E0), and +0x54 \| 2 (0x2F0440); for a room filled already whose bit 2 is clear (one let go and built again: the new ActiveRoom's state is its DRLG room's kept one, 0x326480: 1 when +0xA0 & 1, 4 for a room with flag 0x40000, else 0) 0x503790 alone, then the bit set. A room built goes on its act's list: CreateActiveRoom's ActiveRoom maker 0x326480 calls D2RCore's AllocateActiveRoom (`.maho` 0x3E2B5BC, D2RCore 0x80E000), whose original 0x2EF340 allocates 0xB8 bytes, seeds +0xA0 from the DRLG room's stepped seed, links the room at the act's head (+0xB0 the old head) and sets the act's +0x84. So a room the plugin builds is filled by this pass. Checked (signature, the steps and the bit): rooms filled ahead |
 | far room built and filled | 0x328900 / 0x2F0810 / 0x4042A0 | 0x2F0810 (bank, act, x, y): the act's DRLG (+0x70) to 0x328900 (bank, DRLG, x, y): the DRLG room at that place (0x327400) built as CreateActiveRoom builds one; 0x4042A0 (game, ActiveRoom) fills it at once (the pass's steps). The game's own far room: a town portal's other end (0x490070) and the console's warp (0x4100E0). Not called (the pass fills the rooms the plugin builds) |
 | object groups | 0x510F00 / 0x512DB0 / 0x38FD90 | (game, ActiveRoom), the fill's third step: the Levels row (0x32C4A0), a record of the level's (0x512DB0 (game, level): +4 the rooms filled so far, counted here, +8 the level's rooms (0x2EFA20), +0x10 a flag); unless Levels +0x178 sends it to 0x511580 first: for each of the eight groups (Levels +0xED, a byte; its chance +0xF5) a step of the room's seed (0x2EFBF0: the ActiveRoom's {lo, hi}), lo % 100, set to 100 (no roll) past three quarters of the level's rooms filled while the record's +0x10 is 0 and the group's row says so (+0x127); below the chance, another step, the group's entry by its PROBs (ObjGroup rows 0x30 bytes: +0 the classes, +0x20 DENSITY, +0x28 PROB; 0x38FD90 (bank, group)), the object's Objects row's PopulateFn (+0x15D, the table 0x239BC10) called with (game, room, the density, the class, 100). The random monsters (0x505D70) step the same seed before it, and the populate functions find free spots among the units already in the room. So what a room rolls goes by what its monsters took and by the order the level's rooms are filled in: nothing can say it before the game fills the room. 3.3: 95 levels can roll an object with an icon (tests/test_mapmarks.cpp; shrines 310, wells 309, Act 5's outdoor waypoints 307 in group 112); Act 1's and Act 2's outdoor groups have none. Read: rooms filled ahead |
-| room activation levels | 0x328F60 / 0x328DA0 / 0x328710 / 0x328680 / 0x328780 / 0x328BF0 | a DRLG room's counts at four levels (+0x28 short[4]) and its level (+0x70: 0 a player's own room, 1 built (its ActiveRoom made, filled by the pass), 2 and 3 its data loaded, 4 none); each level's room list in the DRLG (+0x130 + level x 0x1C0, linked by +0x38 / +0x1B0). 0x328F60 (bank, room, level): the room's near rooms one level further (0x328DA0, recursive, levels up to 3), then the room at its level (the table 0x2372700: 0 0x328270, 1 0x3282F0 (builds: 0x328FD0), 2 0x3283D0 (builds only with a level-1 count), 3 0x328560 (loads tiles and presets)). A player's room change 0x328710 (bank, old, new) holds the new one at 0 and lets the old one go; the client's room packets hold and let go at level 1 (0x2EF320 -> 0x328680, 0x2EF700 -> 0x328780). Going down: 0x328620 for levels 0..2 (the level from the counts), 0x328630 for 3, which frees the room (0x3F3AA0: its ActiveRoom through 0x2F0110, which unlinks it and hands its units over; its data) only when its level comes to 4 and the DRLG's +0x110 bit 0 is set: the act maker 0x2EF1C0's fourth argument, 1 for the client (0x86BC0), 0 for the server (0x48AA50). So the server frees no room: a room it built stays built, its units with it, and its level free (0x2EFFF0 / 0x327370: a level no player is in or next to, +0x0C 0, after a countdown +0x1FC; 0x327E70 wants every room at level 4 without the built bit +0x50 & 0x100000, set by 0x3F3930; then 0x327C40) never comes for a level with a built room. Read: rooms filled ahead |
+| room activation levels | 0x328F60 / 0x328DA0 / 0x328710 / 0x328680 / 0x328780 / 0x328BF0 | a DRLG room's counts at four levels (+0x28 short[4]) and its level (+0x70: 0 a player's own room, 1 built (its ActiveRoom made, filled by the pass), 2 and 3 its data loaded, 4 none); each level's room list in the DRLG (+0x130 + level x 0x1C0, linked by +0x38 / +0x1B0). 0x328F60 (bank, room, level): the room's near rooms one level further (0x328DA0, recursive, levels up to 3), then the room at its level (the table 0x2372700: 0 0x328270, 1 0x3282F0 (builds: 0x328FD0), 2 0x3283D0 (builds only with a level-1 count), 3 0x328560 (loads tiles and presets)). A player's room change 0x328710 (bank, old, new) holds the new one at 0 and lets the old one go; the client's room packets hold and let go at level 1 (0x2EF320 -> 0x328680, 0x2EF700 -> 0x328780). Going down: 0x328620 for levels 0..2 (the level from the counts), 0x328630 for 3, which frees the room (0x3F3AA0: its ActiveRoom through 0x2F0110, which unlinks it and hands its units over; its data) only when its level comes to 4 and the DRLG's +0x110 bit 0 is set: the act maker 0x2EF1C0's fourth argument, 1 for the client (0x86BC0), 0 for the server (0x48AA50). So this path frees no room of the server's: its level free (0x2EFFF0 / 0x327370: a level no player is in or next to, +0x0C 0, after a countdown +0x1FC; 0x327E70 wants every room at level 4 without the built bit +0x50 & 0x100000, set by 0x3F3930; then 0x327C40) never comes for a level with a built room. The server's built rooms go by the unloader (next row), which this record had missed until 2026-11-03. Read: rooms filled ahead |
+| the server's room unloader | 0x4088C0 / 0x2EFEB0 / 0x2F0630 / 0x2F0110 / 0x361260 | run by the server's frame (0x406550) when its frame counter is a multiple of 12: for each act's built rooms (the list the fill pass walks) 0x2EFEB0 (ActiveRoom): +0x70 (what a client has of the room) null -> +0x10 one more, else +0x10 = 0; above 10 (eleven passes, some 5 s, with no client) and 0x2F0630 (act, room) saying it may go (no flag 0x400000, a portal's room, on its DRLG room; that DRLG room's activation level +0x70 above 1: not a player's room nor one held near it; for a town-like level (0x327850) or level 0x78 / 0x89 every room of the level above 1), each unit of the room to 0x504260, then 0x2F0110 (act, room): unlinked from the act's list and its near rooms' lists, 0x361260 (the DRLG room: +0x58 cleared, the fill state kept at +0xA0, and with the built bit 0x100000 its data freed, 0x3F3AA0), freed. A room the plugin builds (CreateActiveRoom leaves +0x70 as it is: 4, none) goes so some 5 s after it is built, unless a player is near. Read: rooms filled ahead (the reads' rooms, mapmarks.h RoomBox) |
+| a unit taken off the server | 0x504260 / 0x504B70 / 0x5045D0 / 0x505090 | 0x504260 (game, unit): a monster to 0x504B70, which works out whether it is kept (not a pet, a revive, a dead one of a player's ...; its MonStats2 row through MonStats +0x4C at data tables +0xF98, 0x128 bytes a row, +0x125, monstats2.txt's restore: 0 never, 2 always, 1 by the rules) and then saves it (0x5045D0 -> 0x505090: a record of 0xD8 bytes, +0x00 / +0x04 its subtile, +0x08 class, +0x0C its id, +0x18 kind bits, +0x30 / +0x34 .. life and the frame, +0x3A its nine mods) and frees it (0x48FAA0); an object or an item: saved by 0x5045D0 into the act's records by the room's place (game +0x1B0: an object's place, type, class, mode, sparkle (+0x24), interact (+0x28), flags, not its id; an item serialized by D2RCore's SerializeItem) and freed. **Not every object is saved** (read 2026-11-03): first "the level keeps its units" (0x327830 (bank, level id) -> the level's record, 0x32C200, +0x94: LevelDefs SaveMonsters, 0 only for levels 0, 1, 40, 50 (Harem Level 1), 75, 103, 109) or the unit has flag 0x2000000 (+0x124 bit 25; its one setter 0x34ED80 has three callers: an item put on the ground by a player 0x43DD00, the pick-up 0x471950, and the preset placer 0x50A050 for a monster placed in mode 12, dead); then an object's Objects row (0x38FD00) must have Restore (+0x131), its sparkle byte (0x4903D0: unit +0xC8) no bit 2, and with RestoreVirgins (+0x132) its mode must be 0 (0x34AB60); the town portals (59, 60) are saved apart. Any other object is only freed. Every live enemy the map marks has restore 1 or 2 (3.3). The game makes them again as the room is filled again (0x503790: 0x505D70 the monsters, by the makers 0x49AF30 / 0x499210 with the record's id; then 0x48DC50 the objects, their mode, sparkle and interact restored, and 0x5043D0 the items: new ids for both; a saved life is kept for 7500 frames). The server never fills a room's objects again: a room built again takes its DRLG room's kept fill state (0x326480: +0xA0 & 1 -> 1), and only a room with DRLG room flag 0x40000 is filled from nothing (state 4), which the DRLG room maker 0x361140 sets for a level with flag 0x10 (+0x04), set only when its DRLG's +0x110 bit 0 says it is the client's (0x3267C0 / 0x328180). Read: rooms filled ahead; what the game throws away (maploot.h kept_when_let_go) |
 | a room's units | 0x2EFD90 / 0x34B4A0 | an ActiveRoom's first unit (+0xA8) and a unit's next in its room (+0x160): the pick-up's walk over the rooms near the player (0x471997 ..). ActiveRoom +0x54: bit 0 filled (presets and objects), bit 1 its monsters (0x2F05F0 / 0x2F0440). Read: rooms filled ahead |
 | a room's monsters made | 0x503790 | (game, ActiveRoom): the server's population of a room, the first time it is activated (from 0x4042A0, which makes a room's units and wakes its sleeping ones, and 0x408670): the random monsters (0x505D70, whose packs make random uniques and champions through 0x49AF30 -> 0x49EDB0) and the layout's preset monsters (0x48DC50 -> 0x50A050: a super unique through its maker 0x499BA0). So nothing knows of a random unique or a Herald before a player has come near its room. Read: named enemies (why they are marked from when they are first seen) |
 | SuperUniques rows | 0x499BA0 | data tables +0x1078 (count +0x1080), 0x3C bytes: +0x00 u16 the row, +0x02 u16 the name's string id (the game fills it in at its load; 0 in the loader's compiled rows), +0x08 the MonStats class, +0x0C hcIdx (the maker's switch on special ones). The maker (0x499BA0) sets the monster's kind 2 and 8 and its super unique id (0x38E810: monster data +0x2A; the client's monster from its packet 0x98FA0 too). Read (the name): named enemies |
@@ -826,6 +906,16 @@ Launch: `scripts/d2r-loader.sh` (umu-run, Battle.net prefix, Proton verb `run`),
 | client pet list | 0x13ABC0 / 0x2A4DC10 | (player, pet type, any) -> the id of the player's pet of that type, -1 none: nodes from the head 0x2A4DC10 (+0x04 pet type, +0x08 the pet's id, +0x0C its owner's id, +0x20 nonzero for a gone one, which counts only with `any`, +0x30 the next). The client's mercenary check 0x159D20 asks it with type 7 (pettype.txt "hireable") and the local player, then the client's unit of that id (0x9A5D0, a monster) and the requirement test. Read: ignore item requirements |
 | server pet of a type | 0x4FF1A0 | (game, player, pet type, any) -> the unit (0x48FE80, a monster) of the first node of the player's list of that type (player data +0x98, 0x20 bytes a type) that is not gone (node flag bit 0) unless `any`. The mercenary's gear handlers 0x4C0E20 / 0x4C3DC0 ask it with 7 and 0. Called: ignore item requirements (the mercenary's items worked out again) |
 | items worked out again | 0x470C90 / 0x470CA0 / 0x475760 | 0x470C90 (game, unit, a3, a4): `mov r8d, r9d` and a jump to 0x470CA0 (game, unit, tell the client): for a player or a unit with the mercenary flag, the inventory's charms that D2RCore's IsCharmUsable and 0x475760 pass enabled; every worn item (body locations 1..10) disabled (item flag 0x4000, its stats off, 0x475020), then each that is not broken and passes 0x475760 enabled again (0x475090), over and over until nothing changes (so one item's strength counts for another's requirement); then the item skills. 0x475760 (unit, item) -> the requirement test, then a pairing test (0x371E90). Run by a game's load (0x52E910, the load D2RCore runs, and 0x408EA0, a client's join), an attribute point spent (0x4B3C70), the respec, a purchase, a quest reward, and by the inventory moves (0x471500, 0x471E90, 0x472590) and the identify routine through 0x470CA0. Called (0x470C90): infinite cube ingredients, ignore item requirements |
+| automap: list draw | 0xD6F10 | (tileset 0..3, list (a layer's tree), view, opacities) - each cell of the list inside the view's cell rectangle (+0x00 .. +0x0C, widened by the tileset's offsets): the key (node +0x20: u16 tag, i16 cell +0x22, x +0x24, y +0x28) less (8, the tileset's dy - 5) (`add edi, -8`, `sub edx, [rbp-64h]`, `add r15d, 5`), times the view's scale (+0x30 / +0x34), less its centre (+0x10 / +0x14) times it, plus its origin (+0x28 / +0x2C), each product floored (0x12DF3D4, floorf); the tile's sprite: the cell / the tileset's tiles a chunk, that chunk's sprite object (16 bytes) of the tileset's chunks, the rest the frame; options {1, 1, 1, 0} tint, the opacity by the fade mode (from the opacities, 0.85 for no fade), the frame at +0x18; the sprite draw with the view's +0x38. The units' pass (0xD2600) draws the floor, wall and units' icon lists with tileset 0 and the fourth with a town's. Tileset records 0x58 bytes from 0x2A2AE00: +0x30 {chunks, u64 count}, +0x48 tiles a chunk, +0x4C in all, +0x50 a tile's size; the offsets table 0x1CC3520 (8 bytes a tileset: tileset 0's (16, 32)). 3.3's default tileset: hd/global/ui/automap/default00 .. 14/tiles.sprite, 100 tiles of 66 x 128 a chunk, 1499 in all (318 the sparkle chest, 319 the coin chest, 310 a shrine, 309 a well, 307 a waypoint). Read (the place, the options; the harness ran it from the dump against maploot.h's cell_place: 20,000 places, none off) |
+| automap: marker draw | 0xD6DB0 | (x \| y << 32, marker 0..7, float scale): the crosses' sprite object 0x2A2ADD8 ("AUTOMAP/Units", 8 frames: 0 blue, 1 green, 2 magenta, 3 slate, 4 dark green, 5 red, 6 white, 7 yellow; the frame's size {width, height} at 0x2A2CF78), centred: the point less (width / 2, height / 2) times the scale, truncated; options at rsp+0x40: the tint {1, 1, 1, 0} (the constant 0x1CC3500), the opacity 1.0 at +0x10, the marker at +0x18, the rest 0 (+0x59 .. +0x5B padding the game leaves); the sprite draw with the scale. Called (named enemies); read (the harness ran it against maploot.h's centred: 20,000 places, none off) |
+| sprite draw | 0x858510 | (sprite object, int32 place[2], options (0xA4 bytes), float scale): in HD graphics (0x846210) the object's +0 (an HD sprite; 0x79DA50 draws it: the place less the sprite's pivot (+0xC4 / +0xC8) times the scale, the frame's width (+0xD0) and height (+0xC0) times it, the tint and the opacity into the draw command), else its +8 (a legacy sprite: a tint other than white through a palette transform 0x90E670). The options: +0x00 a tint (four floats; {1, 1, 1, 0} none), +0x10 the opacity, +0x18 the frame, +0x20 a second color, the rest variants. 36 callers (the automap's lists and crosses, image widgets). Called: chests and items on the map |
+| sprite loader | 0x858990 | (sprite object, name, u8 flags) - the object's sprites released (0x79E310 / 0x79D200, null-safe) and set to 0, then in HD graphics "data/hd/global/ui/" + the name to D2RCore's `.maho` 0x3E2B0DC (its RVA 0x4A1490, which calls the game's 0x79BDA0 through its routine table): ".sprite" appended (".lowend.sprite" in the low-end texture mode, byte 0x3420E9C), the file opened through D2RCore's `.maho` 0x3E2B0E2 (its 0x4A1520: the path lowercased and looked up among its resources first, 0x4A32A0), a sprite cache by name; "File not found" to the game's log and no sprite when there is none; in legacy graphics "data/global/ui/" + the name to the DC6 loader 0x145F320. The automap's set-up 0xD6920 loads its crosses so ("AUTOMAP/Units", flags 0), then its frame count (0x858760: an HD sprite's +0xCC) and its frame size (0x858890: {+0xD0, +0xC0}). An empty name only releases (`if (*name)` guards the load). A sprite still held when the game shuts its UI down is an assertion box in d2rloader.log ("s_loadedSpriteAssetPool.IsEmpty()", D2PrismUI.cpp:230, then "!m_allocCount", bitmap_allocator.h:29). Called: the plugin's icons for the map (loaded in a game, released with an empty name at its end) |
+| HD sprite file | | "SpA1", u16 version 31 at +4, u16 a frame's width at +6 (the frames of some atlases 2 pixels wider), the width of all frames +8, the height +0xC, the frame count +0x14, the pixels' bytes +0x20, 4 at +0x24, straight-alpha RGBA rows from +0x28 (the frames side by side). Written: the plugin's icons (mapicons.h) |
+| object operate dispatch | 0x592C40 / 0x23A51C0 | (game, user, object): the Objects row (0x34AD90) +0x15E OperateFn (below 0x4B) indexes the table of operate routines (8 bytes each): 1 casket 0x58EDD0, 2 shrine, 3 urn 0x58F1D0, 4 chest 0x58E2F0 (the lock: the Assassin or a key, UseKey), 5 barrel 0x58E890, 8 door 0x58E090, 14 breakable 0x58EED0, 15 portal 0x58F680, 19 / 20 armor stand / weapon rack (0x58F560 / 0x58F5F0: an item of their own, 0x43F4F0 through D2RCore's `.maho` 0x3E2B622 / 0x4414C0, a request with no source and mode 3, the rack's mode 2 set after it), 24 0x5A0C90, 26 bookshelf 0x58FF50, 33 Wirt's body 0x58ECE0, 39 .. 41 the Horadric chests, 48 0x5904D0, 51 Act 3's stash 0x5905E0, 57 .. 59 Khalim's chests, 68 0x590960. Those that call the object drop (0x5930B0): 1, 3, 4, 5, 14, 24, 39, 40, 41, 48, 57, 58, 59, 68; and 51 (JunglePillar0..3) through the object's event 10: its routine sets mode 1, queues events 1 (the opening's end, at its row's +0x9C frames) and 10 (at Parm1, row +0x138: 11 / 34 / 13 / 33 frames), sets its trap off (0x594630, by the interact byte & 0x7F) and names the user its owner (0x510E50); event 10 (0x593D90) calls the object drop with {game, object, the owner (0x48FE80 (game, 0, 0x510B80's id)), its room}, which hands the drop core the object as its source (0x59333D, rdx = the context's +0x08). Nothing else schedules an object's event 10 (the only other type-10 adds, 0x55AC23 and 0x55B008, are Attract's and Confuse's, for monsters); 48 drops again by event 9 (0x5941E0, also scheduled by InitFn 51 0x50EEB0 for a jack-in-the-box made in mode 1 or 2). An item of its own through the item maker 0x43FBF0 (game, unit, class, ...: a CreateItemEx request with the unit as its source, mode 3): 26 a Tome or Scroll of Town Portal or Identify (tbk / ibk / tsc / isc by rolls), 33 Wirt's Leg (leg) at once and then, through the quest objects' event 7 (0x516370, by class: 268 -> 0x5DC7A0), 10 to 20 piles of gold (gld) once a game; the quest objects 12 the Inifuss tree (bks), 21 the Malus (hdm) and 28 Lam Esen's Tome (bbb) their quest's item. The object event table 0x1D3F640 (12 handlers by type: 1 0x594350 the opening's end (mode 2, selectable by mode), 7 0x594590 -> 0x516370, 9 0x5941E0, 10 0x593D90, 11 0x593CF0 the red portals). No drop: 7 the exploding barrel 0x58EA20 and 30 the exploding cow and chest 0x58DF00 (the explosion, 0x593AB0 / 0x5F2270); the Countess's chest (ForgottenTowerChest 371, OperateFn 0, not selectable) is opened by the tower chest spawner missile her death makes (missiles.txt row 332, pSrvDoFunc 18 -> 0x459850 -> 0x592CF0: three object drops and gold). Read (the data: maploot.h's chest rule, tests/test_maploot.cpp) |
+| object init | 0x510BA0 / 0x510CB4 / 0x239B980 | the server's object init 0x510BA0 (game, unit, mode, room, x, y): the unit's sparkle byte cleared (0x491910 (unit, 0)), selectable, mode, then the routine of the Objects row's +0x15C InitFn (below 0x51) from the table 0x239B980 (the context: +0x00 game, +0x08 the unit, +0x10 room, +0x18 the room's seed, +0x20 the row): 3 the chest's 0x50E920 (the lock and the trap by the area's level, the interact byte), 57 0x50EAC0 = InitFn 3 and then the unit's +0xC8 set to 1 (the sparkle: a super chest; ConsolationChest "sparklychest" 397 and SpecialChest100 455 in 3.3), 79 0x549E50 (the placeholders' and ControlObject's). Read (the data) |
+| sparkle (super chest) | 0x491910 | (unit, u8) -> unit +0xC8: 0 from every object's init (0x510BA0), 1 from InitFn 57 (0x50EAC0, a tail jump) and from a layout's unique chest placed (0x50FE03, below), 2 for the object 0x592210 makes (class 162). Nothing else writes it; opening a chest leaves it. The server's units only: the client's object packet (0x51, 0x129D70 -> 0x99510: type, id, class, x, y, mode, the interact word) carries no such field, and the client's object init (0x1CB410) does not set it. Read (game.cpp object_sparkle, the server's objects): chests on the map |
+| layout placeholders | 0x48DC50 / 0x510E10 / 0x50FB20 | the fill's maker of a layout's unit (game, room, type, class, ...): an object of class 573 .. 582 is not made as itself: 573 (ControlObject) nothing, 574 .. 582 to 0x510E10 (game, room, class, x, y): 574 .. 579 the desert shrines' placeholders; 580 PlaceUniqueChest: a chest of its act's list by the room's seed (0x50FB20, the act of the room's level `.maho` 0x3E2B5C8: Act 2 TombChest1 / TombChest2 (87, 88), in the Arcane Sanctuary (level 74) ArcaneChest1..4 (387, 389, 390, 391); Act 3 JungleChest / JungleChest2 (181, 183), in Travincal (83) TravincalChestLarge/Med Left/Right (329 .. 332); Acts 1, 4 and 5 thirteen (5, 6, 139, 140, 141, 144, 176, 177, 198, 240 .. 243); in level 25 class 371) made (0x490410), then the sparkle (0x491910 (unit, 1); in levels 62 .. 64, the Maggot Lair, one in two), selectable, mode 0: a super chest; 581 PlaceRandomTreasureChest: a chest of the same list, no sparkle; 582 PlaceArcaneThingamajig: a class by 0x59F020. The layout's preset step (0x3DF600) keeps 581 three in four by the room's seed (`0x245`), classes 196 and 261 one in two. The Kurast layouts place 7 PlaceUniqueChest (slums16x16_1.ds1 three side by side; the slums are taken to be Lower Kurast's, the one of the three with no temple layout, burbs the Bazaar's and metro Upper Kurast's; burbstemple3, metro16x08_0, metro16x16_1, metrotemple3 one each) and 11 PlaceRandomTreasureChest (DS1s read from CASC: casc_list.py "*kurast*ds1", then the objects after the layers, act 3's objpreset indices 2 and 36). Read: chests on the map (super chests by the sparkle byte, tests/test_maploot.cpp: all 25 classes of the lists are chests) |
+| objects.txt's *ID | | not the class: the compiled class is the row less the "Expansion" divider (txt row 410, not compiled), and 3.3's rows at the end (ControlObject .. colossal_statue_3) have *IDs out of order (ControlObject *ID 577 is class 573, PlaceUniqueChest *ID 584 is 580, ColossalAltar *ID 573 is 583). objpreset.txt names classes by name. Read the compiled objects.bin, or count rows |
 | the game's present (DXGI) | 0x109F4C0 / 0x10FACA0 | pm_dxgi::Instance::Present (instance, result out, record) -> result: the record (r8, kept in r9) +0 the IDXGISwapChain, +0x50 the sync interval, +0x38 / +0x39 bytes that with the instance's +0x80 (tearing supported) and a sync interval of 0 give flags 0x200 (allow tearing), else 0; `call [rax+40h]`, the table's slot 8 (Present); the result {u16 code, i32 hr} 0 for a success, else a code by the hr (0x402 out of memory, 0x403 the device lost: removed, hung, reset, its driver failed, or an invalid call; 0x401 the rest) and 0x107DDD0. Three callers: pm_dx12::CmdQueue::Present 0x10FAE51 (the record at its +0x10) and the DX11 renderer's 0x10AECAB / 0x10C6709. Hooked (through the loader): the panel drawn there while the DXGI Present hooks are passed by (RTSS) |
 Client map (UI thread): a dynamic path's room at +0x20 is an ActiveRoom; ActiveRoom +0x18 the DrlgRoom (0x192B20),
 DrlgRoom +0x10 near rooms (+0x18 count), +0x48 next in its level, +0x50 flags, +0x58 ActiveRoom, +0x60/+0x64/+0x68/+0x6C
@@ -1333,6 +1423,164 @@ monster of level M; the game's own reductions would leave K)"); the console's st
 that the routine asks the penalty with its third and fourth arguments, that the penalty's first table entry is the
 whole amount, and that both its ratio calls are the getter found; else the multiplier scales the game's own amount.
 
+Chests, unique, set and rune items on the map (2026-11-02; asked as "Add a new cheat for making chests visible on the
+map. Also make a cheats to show: unique, set, and rune as different cheat options", "I want all of these to show as
+icons only", "it's important that each cheat has a unique icon for what it shows"; the panel's Display section after Area
+names at exits, `map_chests` with `map_chest_tier` "super" / "chests" / "openable", `map_unique_items`, `map_set_items`,
+`map_runes`; the console's `chests`, `chesttier`, `uniques`, `sets`, `runes`).
+- What is a chest (maploot.h, from the Objects rows): an object that opens for loot is one the player can select in its
+  first mode (Selectable0) whose OperateFn makes a drop (the record: object operate dispatch); of those, a super chest
+  has InitFn 57 (the sparkle), a quest chest a chest's name ("chest" or "casket" in its class) and an automap icon of its
+  own (318), a chest a chest's name and the chest routine (4); the rest (urns, jars, baskets, caskets, bodies, logs, rock
+  piles, Baal's lair's tombs, barrels, racks, Act 3's stashes, bookshelves, Wirt's body) are openables. 3.3: 2 super
+  chests, 6 quest chests, 46 chests, 126 openables (180 in all; the picker's three choices show 2, 54 and 180 classes).
+  Until 2026-11-03 the rule took only the routines that call the object drop themselves (and the racks), and left out
+  seven classes (reported as "a few stashes in lower kurast that didn't show up on the map"): Act 3's stashes
+  (JunglePillar0..3, OperateFn 51, whose drop comes by the object's event 10; rolled by the object groups 40, 42, 52, 64
+  and 69 of 18 Act 3 areas, from the Spider Forest to Travincal and the Act 3 dungeons and sewers, and placed by 24
+  Kurast layouts, Lower Kurast's slums among them), the bookshelves (Bookshelf1 / 2, 26: a tome or a scroll; 13
+  layouts of Act 1's Barracks and Jail) and Wirt's body (33, Tristram). Every operate routine of the table was gone over
+  (the record: object operate dispatch): the quest objects that hand over their quest's own item (the Inifuss tree, the
+  Malus, Lam Esen's Tome) stay out, with the exploding barrel, cow and chest (no drop) and the Countess's chest (not
+  selectable).
+- A super chest is a unit's too (fixed 2026-11-02, the same day: until then Lower Kurast's never counted as one, and
+  "Super chests only" showed nothing there). A layout's unique chest (PlaceUniqueChest) is made, as its room is filled,
+  into an ordinary chest class of its act's list (Lower Kurast's JungleChest / JungleChest2) and given the sparkle, the
+  unit's byte +0xC8 that InitFn 57 sets too (the record: sparkle, layout placeholders). The server's read of an area
+  carries the byte (game.cpp object_sparkle), and a chest or openable with it is a super chest (maploot.h with_sparkle);
+  the client is never told it, so a mark the client made first is made a super chest by the server's read and stays one.
+  The byte must read as the game gives it (0 or 1 on what opens for loot, 1 on the classes of InitFn 57: sparkle_holds),
+  else a warning, and the classes alone say for the rest of the session. The read's line counts them ("chests: level N:
+  ... K objects that open for loot (S super chests)").
+- What the game throws away as it lets a room go (fixed 2026-11-03, reported as "there are some chests that show up in
+  bloody foothills that don't exist"; the record: a unit taken off the server). The server saves an object of a room it
+  lets go only when the object's class has Restore and its level's record keeps its units (SaveMonsters), and it never
+  fills that room's objects again; the rooms built ahead for a read go some 5 s later. So an object of a class without
+  Restore, or of a level that keeps none, was read, marked, and gone before anyone came near. 3.3: Barrel3 ("barrel
+  wilderness", class 419, OperateFn 14, a grey chest under "Everything openable") is the one class that opens for loot
+  without Restore; the object groups 103 (with Barrel2) and 105 (with the well) roll it in the Bloody Foothills, the
+  Frigid Highlands and the Arreat Plateau (110 .. 112), and three of the Barricade layouts place it (NorthHouse9,
+  WestHouse7, SharpToothDC; PrisonDC.ds1 has one too and no lvlprest row uses it). The levels whose record keeps no
+  units are the five towns (never read ahead), Harem Level 1 (read ahead until then: its one layout, Harem2.ds1, has
+  six torches and seven braziers, nothing that opens for loot, no monster) and the null level; no level is filled ahead
+  now whose record keeps no units (roomfill.cpp, maploot::level_keeps_units: the chests, the enemies and the rolled
+  landmarks alike; the tick reads maploot's rows under any of the map's switches that fill an area). Now (maploot.h
+  kept_when_let_go): such an object is left out of the server's reads
+  ("... K objects that open for loot (S super chests; F more the game throws away as it lets their rooms go, drawn only
+  while near you)") and drawn only while the automap's pass hands it over (its room near the character: the server
+  keeps it as long), from the client's own sight, by its id, for two of the automap's draws after the last time it was
+  handed over ("chests: object class 419 (level 110) is one the game throws away as it lets its room go (its class has
+  no Restore) - its icon is drawn only while it is near you"). The classes' Restore (+0x131) and the levels' SaveMonsters
+  (LevelDefs +0x94, through the loader's LevelDefs rows of 0x9C bytes; without them every level is taken to keep its
+  objects, with a warning) are read once a bank (the log: "map: bank N: what the game throws away as it lets a room go -
+  1 classes that open for loot have no Restore (Barrel3), and 7 of 138 levels keep no object ..."). And a read of an
+  area's objects now takes away the marks of its level in the rooms it went over (built and filled) that it did not find
+  ("chests: object class N (level L) is no longer where the server's read of its room looks - its icon goes"), as the
+  items' and the enemies' reads do; the rooms the game has built and not filled yet count as not read for all three
+  (roomfill.cpp units_of: a room let go and built again gets its saved units back in the fill pass's frame step). The
+  console's status counts both ("N gone from where a read looked; F the game throws away as it lets their rooms go (K
+  near you, drawn now)"). No new hook, no new game call: the loader's rows, and reads of the server's units as before.
+  Left as the game has it: the room fill ahead takes those barrels away from the rooms far from where the character
+  enters (made by the game's own fill, then thrown away by its own unloader before anyone came), where the plain game
+  makes them as a player first comes near; ExplodingChest100 (a trap, Restore 0, not loot) the same in those three
+  areas. The Act 4 TrappedSoulPlaceholder (369) has no Restore either; it is a placeholder.
+- Where they come from: an area entered is filled ahead (the named enemies' "Fill and read", for every area but a town)
+  and its objects read on the server thread; a chest the client knows (the automap's pass hands its objects to the hook)
+  updates its mark, and one seen open (mode not 0) loses its icon for good (a chest does not close); an area entered
+  again is read again. The client is never shown an opened chest's mode in the automap's pass (its object state packet,
+  0x0E, is a stub `ret` in 3.3: reported 2026-11-03, "when opening chests that are marked on the map, they are not
+  removed from the map"), so the opening is taken from the server: the object drop (0x5930B0) runs inside the operate
+  routine after its mode setter (the chest's 0x58E2F0: 0x34E5F0, then 0x5930B0) and calls the drop core with the object
+  as its source, whose hook then has the area's objects read again at the next server frame ("chests: level N: an
+  object opened (it dropped) - ..."). A stash's drop comes by its event 10 some frames after the click, with the stash
+  as the drop core's source: its icon goes then. What makes an item of its own (a rack, a bookshelf, Wirt's body)
+  makes it without the drop core, so the item creation hook says it (maploot::item_made, under the chests' switch: an
+  item made on the ground, mode 3, for an object or for no unit, the racks' makers naming none), and the area's
+  objects are read again the same way (no new hook or game call: the request's +0x00 and +0x24, read as loot.cpp reads
+  them). An object that opens without making an item (a barrel that makes a monster) keeps its icon until the area is
+  entered again. Items: the server's items on the ground (mode 3 or 5) of the area the character is in, read from
+  its built rooms when the drop core's hook says something dropped (one read a server frame at the most), an area is
+  entered or a switch changes; the client's items on the ground the pass hands the hook; the pick-up routine's notice
+  (the item notice's hook, its return address) takes an item's icon away. A read of an area drops the marks of its items
+  no longer on its ground, but for one the client sees there.
+- How they are drawn: once a draw, at the local player's own call, the marks of the automap's layer (a level's layer
+  from its record, cached for the draw). A chest's icon is the automap's own tile (tileset 0's chunks, a cell's chunk and
+  frame) at the place the list draw would give an object's icon at its pixels (the key the unit cell add makes, then
+  cell_place: the arithmetic and the options the harness checked against the game's own list draw), opacity 1.0, the
+  openables tinted grey (0.55, 0.55, 0.6). An item's icon is the plugin's (56 x 56 pixels), centred on the automap's
+  point of its pixels (map_point, inside the view's rectangle) as the marker draw centres a cross, at the view's +0x38
+  scale. In legacy graphics, or when the icons did not load, the white cross (frame 6) tinted in the item's text color
+  (gold 199/179/119, green 0/252/0, orange 255/168/0).
+- The plugin's icons (mapicons.h): painted at the plugin's load (4 samples a pixel, a dark outline), written in the HD
+  sprite format (the record: HD sprite file), registered with the Resource service (data/hd/global/ui/d2rloader/
+  cabbycodes/mapicons/<unique|set|rune>.sprite and .lowend.sprite, the same 56 x 56 in both; refused with OwnerInactive
+  while the plugin loads, they are registered again from the worker), and loaded by the game's sprite loader once an
+  item switch is on in HD graphics and an area of a game has been entered (the UI callback; three tries 5 s apart),
+  each checked to be one frame of 56 x 56. They are let go as the game ends (GameLeft, on the UI thread where they were
+  loaded, else at the next UI callback: the loader with an empty name), so none is held at the menus: the first run
+  (1.2.3 of 2026-11-02, loaded at the main menu and never let go) ended with two assertion boxes in d2rloader.log,
+  "s_loadedSpriteAssetPool.IsEmpty()" (D2PrismUI.cpp:230) and "!m_allocCount" (bitmap_allocator.h:29), between the
+  routine s_StatsPool box and the four object-pool ones. Closing the game's window in the middle of a game, before
+  GameLeft reaches the UI, can still leave them held.
+- Nothing is written, and no new hook: the automap's draw hook, the drop core's, the item notice's, the room fill.
+  sites.cpp reads the sprite draw, the crosses' object and size, the options' layout (the tint constant, the opacity,
+  the frame), the tileset's chunks and offsets and a cell's arithmetic from the marker draw, the list draw and the
+  crosses' set-up (two new read-only signatures), and the HD sprite's frame count and size from the getters it calls;
+  without any of it the four switches are greyed. Checked without the game (scratchpad harness, 2026-11-02): 132 of 133
+  sites usable (the unit lookup's two copies), the facts as above; the game's own list draw and marker draw run from the
+  dump with a stub for the sprite draw, 40,000 places as maploot.h works them out.
+
+All enemies on the map, and the names off (2026-11-03; the panel's Display row is "Enemies on the map", its switch still
+`map_named_enemies`, with the picker `map_enemy_tier` "named" / "all" and the checkbox `map_enemy_names`; the console's
+`enemytier`, `enemynames`). Under "All enemies" every hostile monster that is not named gets the enemies' dot, never a
+name: minions and an area's ordinary monsters. The client's: each monster
+the automap's pass hands the draw hook that is an enemy by the server's rule below and that its hostility test calls
+an enemy, outside a town, kept by id where it was last drawn (g_plain, 32,768 at most), let go for good when seen dead.
+The hostility test alone let critters through (a neutral is on no one's side: Act 3's snakes and parrots) and, in a
+town, every monster (reported the same day: "there are npcs in the towns that are showing up on the enemies map. In act
+1 there are chickens and cows that show up. Act 2 has lots of small scarabs walking around on the map. Act 3 has one
+human model walking around that shows up on the map. And Act 5 has some dots on the map that I can't find models
+attached to, near Malah": the chicken (the monsters' side, not attackable), the cow, Act 2's bug and scorpion, the
+character's own mercenary, the injured barbarians on Malah's cots and the town's barbarians; the NPC rows were left out
+already). The server's: the same read of the area's monsters as the
+named ones (roomfill.cpp hands every live one), an enemy by its MonStats row (mapmarks.h server_enemy: Align 0 at
++0x87, not an NPC, and its MonStats2 row's isAtt, +0x05 & 2, through MonStatsEx at +0x4C: the traps, spawners, hydras and
+effect monsters have none; checked over the compiled rows, 592 of 751 classes). An area's newer read replaces its marks
+in the rooms it went over, but for one the automap draws now (a mark elsewhere stays: its room let go, its monster saved
+with its id). The names checkbox leaves the named enemies' names unwritten (their markers stay).
+The markers (asked the same day, "I want red dots instead of crosses", then "the dots for normal enemies are too small.
+Instead of a size difference maybe put an orange border around the named ones") are the plugin's red dot, mapicons.h
+kEnemy (enemy.sprite), and for a named enemy the same red disc ringed in orange, kNamedEnemy (named.sprite), beside the
+item icons, centred on the automap's point by the game's sprite draw at 0.58 of their 56 pixels (the dot some 19 pixels
+across at the automap's own scale; the ringed one 32, its orange band some 5 wide, widened the same day after "the
+orange ring is not noticable enough, make it larger"; maploot::enemy_dot); loaded once a game is entered when the
+enemies' switch or an item switch is on, and let go with the item icons. In legacy graphics, or before they are loaded,
+the automap's red cross, one size for both.
+
+What a read of an area sees (2026-11-03, after "the enemies only show within a small proximity with the user instead of
+for the whole area"; the record: the server's room unloader, a unit taken off the server). The server lets a built room
+go once no client has had it for eleven of its unloader's passes (every 12 frames: some 5 s), each unit in it saved (but
+an object the game does not keep: the record, a unit taken off the server; the chests' "What the game throws away") and
+freed, and builds it again as a player comes near, the units made again from their records (a monster with its id, an
+object or an item with a new one). The rooms roomfill builds for a read stand at no player's level, so they go some
+seconds after the area's first read. Until then every later read (the area entered again, any switch changed in the
+panel: roomfill::arm) saw only the rooms near the character and took away every mark it did not see: switching "All
+enemies" (or the names, or anything) on in an area left only the nearby enemies, and the chests switched on in an area
+read before (2026-11-02's "a range for chests to appear") came only near. Now:
+- every read hands over the rooms it went over (mapmarks.h RoomBox: a DRLG room's tile place, +0x60 .. +0x6C, times five,
+  as the game's own test 0x3605B0 takes it after 0x334ED0), and a mark (named, other enemies, items, and from the same
+  day's "chests that don't exist" the chests) is taken away only when it stands in one of them (in_rooms: a path's pixels
+  back to its subtile) and the read did not find it; a room built and not filled yet is not one of them (its saved units
+  are not made again yet); two reads of a level waiting for the same draw are merged (the older's finds outside the
+  newer's rooms kept);
+- an area's full read (its rooms built, filled, all read: the first entry's) is made again when a switch asks for more
+  than its last full read brought (roomfill's Done.read: the landmarks, the named enemies, "All enemies", the chests):
+  the rooms let go are built again, the game's fill pass makes their saved units again (its second branch, for a room
+  whose state comes back filled; roomfill waits for both bits, sites::FillFacts monsters_bit), and everything is read;
+- the chests are known by their place (level and pixels), not their object's id, which the server changes as it makes
+  them again: a mark read before its room went would stay closed beside the new one, and an opened chest's icon stayed;
+  a picked-up item takes a mark of the same place with it (an item made again has a new id too).
+
 Named enemies read ahead (2026-10-03; asked as "the cheat for showing named still requires us to get close for them to
 show up, which is unacceptable"). A random unique, a champion and a Herald exist nowhere before the server fills their
 room (its random monsters, 0x503790, made with the room's own seed when the fill pass first fills it), and the client
@@ -1350,8 +1598,9 @@ boss by its row, and anything the handler does not name, has its monster's name.
 for the automap's next draw, which knows the level's layer (0x32C200), and take over a layout spot of the same name;
 when the client draws the monster itself its place and its name are the client's from then on (a name worked out
 otherwise is a warning, "named enemies: monster class N (kind K) was marked ahead as "A", and the client names it
-"B"", counted in the console's status). An area entered again is read again: a monster no longer among its area's
-(killed, or gone) loses its mark, unless the client draws it now; a monster seen dead is kept off by its id. Not
+"B"", counted in the console's status). An area entered again is read again, from the rooms the server has built
+now: a monster no longer among their monsters (killed, or gone) loses its mark, unless the client draws it now; a mark in
+a room the server has let go stays (What a read of an area sees); a monster seen dead is kept off by its id. Not
 covered: what the game makes only at an event (the Chaos Sanctuary's seal bosses, spawned as a seal is opened, and
 Diablo; Baal's waves): it does not exist before. sites.cpp reads all of it from the naming handler and its mod loop,
 the picker and the seed routine (NameFacts; the champion table checked to be the handler's own mods). Checked without
@@ -1951,7 +2200,7 @@ thread under Proton), the server's frames (the tick, 25 a second) and the plugin
   the panel. The presents a second are no longer counted (nothing read them).
 - The area names with their levels (the level-name hook, at every frame the automap is open): put together once per
   name, difficulty and table read, then compared.
-- Named enemies on the map (the hook on the automap's draw of one unit): the game draws its automap at every frame it
+- Named enemies on the map (the hook on the automap's marker decision): the game draws its automap at every frame it
   is open (the minimap too), and calls the routine for each unit of the rooms near the player; under the switch a
   monster costs a few reads (its kind and row; a named one its name, the client's hostility test and three drawing
   calls, and its mark kept up to date), and the local player's own call draws the marks of the layer whose monster is
@@ -1962,7 +2211,13 @@ thread under Proton), the server's frames (the tick, 25 a second) and the plugin
 - Rooms filled ahead (the landmarks' rolled shrines): the tick looks at the server player's area when an area or game
   event says so and once a second; while an area is being filled, every server frame: up to 8 rooms built, 2 ms at
   the most, then the game's fill pass fills them in its own frame step; once all are filled, one walk of the area's
-  rooms' units. Each area once a game.
+  rooms' units. Each area once a game, and again only when a switch asks for more than its last full read brought.
+- Chests and items on the map: the automap's draw hook, under the switches, notes each object and item of the near rooms
+  the game's pass hands it (a table read and a hash lookup), and at the local player's own call draws the marks of the
+  automap's layer, a sprite draw each; nothing when the automap is not drawn or the four are off. The server reads the
+  items on the ground of the character's area when the drop core's hook says something dropped (once a server frame at
+  the most: a walk of the area's built rooms' units), when an area is entered and when a switch changes; a pick-up is
+  the item notice's event. Nothing looks at a chest or an item every frame for whether it was opened or picked up.
 - The tick was left as it is: 25 a second, a dozen stat reads, the refills and the mirrors that are what the
   switches do, a flag each for the tables, the presets and the terror look (every 5 s: nothing but a shard or the
   switch changes manual terror, and the look is the check that it holds).
@@ -2113,7 +2368,7 @@ pass changes nothing.
    automatic affix picker, curse skill step,
    Cursed monster modifier step, vendor payment, client's portal trip, portal use, portal town end, town portal
    cast, wake in town, client's NPC menu, item free, socket contents free, cube products, item notice, enemy test,
-   kept target, AI dispatcher, killself timer, automap's draw of one unit, item requirement test, resistance of a hit,
+   kept target, AI dispatcher, killself timer, automap's marker decision, item requirement test, resistance of a hit,
    client's mod loop, monster mod add, monster mod test, monster mods run), "the item writer
    sends every item's real level to the client", "thread service: UI work accepted", "character: N presets in ...".
    No line begins with "seeds:" any more.
@@ -2573,8 +2828,10 @@ pass changes nothing.
    the ground 0x471950 / item identified 0x46E8C0" hits=1 each, "sites: identify on pickup the pick-up's notice of
    the item's new place returns to 0x471E6E; the identify routine tests and sets item flag 0x10 ...", "game: item
    handover bound (...), socket contents take-out bound, identify bound", "identify on pickup: bound (the pick-up's
-   notice returns to 0x471E6E; identified is item flag 0x10)", "hooks: item notice hooked at 0x535F60", "settings:
-   ... autoid=0"). F7, Cheats, tick "Identify items on pickup" (under Infinite identify). Kill until magic, rare, set
+   notice returns to 0x471E6E; identified is item flag 0x10)", with the switch and the map's item switches off "hooks:
+   the item notice is hooked only once identify on pickup or the map's unique, set or rune items are switched on ...",
+   "settings: ... autoid=0"). F7, Cheats, tick "Identify items on pickup" (under Infinite identify): at once "hooks:
+   item notice hooked at 0x535F60" and "hooks: the item notice is hooked now that identify on pickup is on (...)". Kill until magic, rare, set
    and unique items drop (on the ground they show their bases' names, as in the game). Pick one up: in the inventory
    it is identified at once, its tooltip has its properties, no scroll used ("identify on pickup: item class N
    (quality Q) identified as it was picked up into the inventory", the first four). A unique or set item the
@@ -2661,7 +2918,7 @@ pass changes nothing.
    lever is pulled) at once; Khalim's Heart chest in Level 2, Khalim's Eye chest in the Spider Cavern, the Horadric
    Cube's and Scroll's chests, the Staff of Kings' chest likewise. The "landmarks: level N ..." lines count more icons
    in dungeons than before.
-38. Named enemies on the map (log: as item 37, "hooks: automap's draw of one unit hooked at 0xD76E0", "settings: ...
+38. Named enemies on the map (log: as item 37, "hooks: automap's marker decision hooked at 0xD78F0", "settings: ...
    enemies=0"). F7, Display, tick "Named enemies on the map", open the automap (Tab) or have the minimap on. In the Cold
    Plains a red cross with "Bishibosh" marks his camp as soon as you enter ("named enemies: level 3 (layer 0): 1 spawn
    spot - Bishibosh"), far away. Walk up: as he comes near the cross follows him ("named enemies: Bishibosh (monster
@@ -2683,10 +2940,24 @@ pass changes nothing.
    Nihlathak's and the Ancients' spawn spots are marked when you enter their areas; in a terror zone a Herald gets a
    cross. Town folk keep the game's own white crosses, your mercenary and summons theirs (no red ones). The names are
    drawn even with the game's own automap names option off. Switch it off: the crosses go at once. The console:
-   `cabbycodes enemies on|off` and the status line "map: ...; enemies=1, N spawn spots read, A named enemies read ahead
+   `cabbycodes enemies on|off` and the status line "map: ...; enemies=1 (Named enemies only, names on), N spawn spots read, A named enemies read ahead
    from the server (0 names worked out otherwise than the client's), M drawn by the client (J marks on the map now), K
    marks let go as their monster died". `cabbycodes perf` with the automap open in a fight: "automap unit (each)"
    well under a microsecond. Should the game stop when the automap opens, send d2rloader.log.
+   The picker and the names (2026-11-03; the row reads "Enemies on the map", log "settings: ... enemies=1/named/names=1"):
+   Every enemy is a red dot of one size, a named one's ringed in orange ("map: the icons for unique, set and rune items
+   and the enemies' dot loaded (... enemy loaded, named loaded)"); in legacy graphics (G) red crosses of one size. Use
+   the full-screen automap (Options, Automap Mode): the mini map draws only inside its box. Which enemies: All enemies -
+   entering an area, every monster that fights you has a dot, far ones too, minions included, none with a name; the
+   named ones keep their ring and name. Switch to All enemies while standing in an area read with Named enemies only:
+   within a second or two the whole area's other enemies come ("named enemies: level N: R rooms built ahead ... - read
+   in full again, a switch asking for more than its last full read; K monsters in the area, J of them named", then
+   "named enemies: level N (layer L): J named enemies and P other enemies of the server's on the map ..."). Untick
+   "Names of named enemies", tick it again, or change any other switch: the far dots stay ("... K kept where the server
+   has let their rooms go"). Kill some and leave: their dots go; come back: the rest are where they were. No dot in a
+   town at all (Act 1's chickens and cows, Act 2's bugs, your mercenary, Harrogath's barbarians), none on critters in the
+   wild (Act 3's snakes and parrots, rats, birds), traps, the Council's hydras or your pets. The console: `cabbycodes enemytier
+   named|all`, `enemynames on|off`; the status line ends "N other enemies on the map".
 39. Area names at exits (log: "sites: collision: a subtile's flags in its room's map 0x366250 / DRLG: a warp tile's preset
    unit 0x3F4670" hits=1 each, "sites: map: area names at exits a built room's own preset units at +0x98; its near
    rooms at +0x10, its warp links at +0x78 (a warp's id at +0x2C, its tile's preset unit of type 5), an ActiveRoom's
@@ -2817,3 +3088,69 @@ pass changes nothing.
    Close RTSS (or give D2RLoader.exe "Application detection level: None" in it) while playing: "overlay: presents come
    through the panel's Present hooks again - they draw the panel", and the panel stays. Without RTSS no such line
    (the Present hooks draw), and with ReShade 6.6 or later neither (item 43).
+45. Chests and items on the map (log: "sites: automap: draw a layer's list of cells 0xD6F10 / automap: tilesets and the
+   crosses' sprite set up 0xD6920" hits=1 each, "sites: map: chests and items the sprite draw 0x858510, the loader
+   0x858990; ...", "map: 3 of 3 icon files registered with the loader (...)", "map: chests ready, unique, set and rune
+   items ready", in a game "map: bank 3: 587 object classes - 2 super chests, 6 quest chests, 46 other chests, 126 other
+   objects that open for loot (the chest icons: cell 319, the sparkle chest 318); ... 33 of them runes", and once an
+   item switch is on "map: the icons for unique, set and rune items loaded by the game's sprite loader (unique loaded,
+   set loaded, rune loaded)"). F7, Display: tick "Chests on the map" (Which chests: All chests) and open the automap
+   in its full-screen mode (Options, Automap Mode: the mini map shows only the part of the map around you, and a chest
+   outside its box is not on it). Entering an area outside town: within a second or two every closed chest of the area
+   has the automap's coin chest icon, far ones too ("chests: level N: R rooms built ahead for the game to fill (M were
+   built already, F could not be), filled in T ms; K objects that open for loot (S super chests)": R the area's rooms
+   less the few built for you, F 0, no "some not filled in time"), the Horadric and Khalim chests the sparkle chest; open
+   one: its icon goes ("chests: object class N (level L) seen opened - its icon goes"). Lower Kurast: the super chests
+   (the slums' layout slums16x16_1 places three side by side; the Bazaar's and Upper Kurast's layouts one here and there) with the sparkle
+   chest, S 1 or more in their areas' lines. Open a chest, an urn or a body: its icon goes within a moment ("chests: level
+   N: an object opened (it dropped) - the area's K objects that open for loot read again from the server", then
+   "chests: object class C (level N) seen opened - its icon goes"); a chest far from where you entered, walked to after
+   some seconds, the same (until 2026-11-03 its icon stayed: the server makes such a chest again with another id). Tick
+   "Chests on the map" while standing in an area read before for the enemies: within a second or two every chest of the
+   whole area has its icon ("chests: level N: ... - read in full again ..."), not only the near ones. Which chests: Super chests only - only those stay, Lower Kurast's among them
+   (until this build none showed there); Everything openable - also urns, jars, bodies, logs, rock piles, racks as a grey
+   chest, and (from 2026-11-03) Act 3's stashes: Lower Kurast's huts, the Bazaar, Upper Kurast, the Causeway, the
+   jungle, Travincal, the Act 3 dungeons and sewers each have some, far ones too; open one: its icon goes as its loot
+   comes out a moment after the click ("chests: level N: an object opened (it dropped) - ..."). The bookshelves of the
+   Barracks and the Jail (Act 1) and Wirt's body in Tristram the same: open one, the icon goes within a moment (it
+   drops a tome or a scroll, Wirt his leg and gold; the same "an object opened (it dropped)" line, the first four), and
+   so does an armor stand's or a weapon rack's (until this build theirs stayed until the area was entered again).
+   What the game throws away (from the later build of 2026-11-03; log at the game's start "map: bank 3: what the game
+   throws away as it lets a room go - 1 classes that open for loot have no Restore (Barrel3), and 7 of 138 levels keep
+   no object ..."): Everything openable, walk into the Bloody Foothills (then the Frigid Highlands, the Arreat Plateau):
+   the area's line ends "K objects that open for loot (S super chests; F more the game throws away as it lets their
+   rooms go, drawn only while near you)", F a handful; every grey chest far away is there when you walk up (until this
+   build some were not: the barrels the game had thrown away). The barrels near you have their grey chest while you are
+   near ("chests: object class 419 (level 110) is one the game throws away as it lets its room go (its class has no
+   Restore) - its icon is drawn only while it is near you"), and it goes as you walk on. The console's status: "F the
+   game throws away as it lets their rooms go (K near you, drawn now)". A line "chests: object class N (level L) is no
+   longer where the server's read of its room looks - its icon goes" names another object the game let go of: send it.
+   The icon stands where the object stands (compare with a quest chest's own icon under Landmarks). Should chests
+   still come only as you get near on the full-screen map, the area's "chests: level N:" line says why: send it. Tick "Unique items on the map", "Set items on the map", "Runes on the map": kill until
+   such items drop (a terror zone, Hell): each has its icon - a gold star, a green gem, an orange rune stone - and keeps
+   it when you walk away and come back ("items: level N (a drop): K unique, set and rune items on the ground ..."); pick
+   one up: its icon goes ("items: an item (level N) picked up - its icon goes"). In legacy graphics (the G key) the items
+   are crosses in gold, green and orange. Switch any of them off: its icons go at once. The console: `cabbycodes chests
+   on|off`, `chesttier super|chests|openable`, `uniques on|off`, `sets on|off`, `runes on|off`, and the status line
+   "map: chests=1 (All chests), N known in this game ..., their icons loaded". A warning that begins "sites: the automap's
+   sprites are not drawn the way expected" (the four switches greyed), "map: the game's sprite loader did not load the
+   plugin's icons" (items as crosses) or "chests: object class N (level L) has the sparkle byte" (super chests by class
+   alone), or a chest icon that stands off its chest: send the log. Save and Exit, then close the game from the menu:
+   "map: the map's icons let go as the game ended or its window closed (5 sprites; ...)", and d2rloader.log has no "s_loadedSpriteAssetPool"
+   or "!m_allocCount" box (the s_StatsPool box and the four object-pool ones are the game's own). The same when the
+   game's window is closed in the middle of a game (its close box, Alt+F4): the run of 2026-11-03 ended so, with both
+   boxes; they are let go as the window closes now.
+46. Alongside other plugins' hooks (D2R Reimagined 3.1.0's loader edition; or Pyre's loot filter alone, its
+   `pyre-lootfilter.dll` in d2rloader/plugins). Without them, nothing changes: "sites: N of 134 routines resolved
+   exactly once, 0 of them behind another plugin's hook", "sites: automap: which marker and name a unit gets 0xD78F0
+   hits=1", "hooks: automap's marker decision hooked at 0xD78F0", and every map switch works as in items 37, 38, 39 and
+   45 (your own cross is now drawn over the plugin's icons, where it was under them). With them: "sites: automap: draw
+   one unit (marker and name) its entry is another plugin's hook (a jump to pyre-lootfilter.dll+0x...): read and called
+   through it, never hooked here", with Controller QOL Updates the same for "Show Items key: press" and "... release",
+   "... 3 of them behind another plugin's hook", and no NOT FOUND for them. Enemies on the map, Area names at exits,
+   Chests and the unique, set and rune items are not greyed and draw as without Reimagined; Pyre's own minimap icons
+   (its filter.json's minimapIcon rules) show beside them, and pyre-lootfilter's log has no "Automap hook refused".
+   Show Items is kept between games (item 11) next to Controller QOL. Gem Bag: with Identify on pickup and the three map
+   item switches off, Reimagined's Gem Bag withdraws and deposits; switch one on: "hooks: the item notice is hooked now
+   that ... is on (it stays until the game is closed; ...)", the switch works, and the bag refuses from then on until
+   the game is closed (as the README says).

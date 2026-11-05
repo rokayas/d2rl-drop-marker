@@ -141,12 +141,16 @@ area_level_waypoints = false
 # area you enter after it.
 reveal_map = false
 
-# Named enemies on the automap: unique and super unique monsters, bosses,
-# terror zone Heralds and champions get a red cross with their name (a champion
-# pack's once, in blue), and keep it where they were last seen, however far you
-# go; the spawn spots of the super uniques and bosses of each area you enter
-# are marked too. A mark goes once its monster is seen dead.
+# Enemies on the automap: unique and super unique monsters, bosses, terror
+# zone Heralds and champions get a red dot ringed in orange with their name (a
+# champion pack's once, in blue), and keep it where they were last seen,
+# however far you go; the spawn spots of the super uniques and bosses of each
+# area you enter are marked too. A mark goes once its monster is seen dead.
+# Which: "named" (those only) or "all" (every other enemy too, a red dot
+# without a name). map_enemy_names = false leaves the names off the map.
 map_named_enemies = false
+map_enemy_tier = "named"
+map_enemy_names = true
 # Landmarks on the automap at once: what the automap shows only once you are
 # near - waypoints, shrines, wells, quest objects - for each area you enter.
 # What the area's layout places is put on at once; for the shrines and wells
@@ -158,6 +162,19 @@ map_landmarks = false
 # enter: at a cave's entrance or a dungeon's stairs, and at each opening where
 # one area meets the next.
 map_exit_names = false
+# Chests on the automap, as the game's own chest icon, from the moment you enter
+# their area until they are opened. Which: "super" (the sparkling super chests
+# only), "chests" (every chest, the quest chests too) or "openable" (everything
+# that opens for loot: chests, and in grey urns, bodies, logs, racks, tombs,
+# stashes, bookshelves...).
+map_chests = false
+map_chest_tier = "chests"
+# Items on the ground on the automap, each kind with an icon of its own, until
+# picked up: unique items a gold star, set items a green gem, runes an orange
+# rune stone (in legacy graphics a cross in the item's color).
+map_unique_items = false
+map_set_items = false
+map_runes = false
 
 # An item's level after its name, as in "Grand Charm (91)": weapons, armor,
 # rings, amulets, charms and jewels (not quest items or throwing potions).

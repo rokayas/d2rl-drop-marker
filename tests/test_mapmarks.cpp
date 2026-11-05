@@ -96,6 +96,27 @@ int main() {
   CHECK(!named(kKindHeraldMinion | kKindHerald, false));
   CHECK(named(0, true));
   CHECK(!named(0, false));
+  // The picker: an ordinary enemy only under "All enemies", a named one under both.
+  CHECK(enemy_mark(true, EnemyTier::kNamed) == EnemyMark::kNamed && enemy_mark(true, EnemyTier::kAll) == EnemyMark::kNamed);
+  CHECK(enemy_mark(false, EnemyTier::kNamed) == EnemyMark::kNone && enemy_mark(false, EnemyTier::kAll) == EnemyMark::kPlain);
+  CHECK(server_enemy(0, 0, true) && !server_enemy(0, 1, true) && !server_enemy(0, 2, true) && !server_enemy(kMonNpc, 0, true));
+  CHECK(!server_enemy(0, 0, false));
+  // A path's pixels back to its subtile: a static path's ((x - y) * 16, (x + y) * 8), a dynamic path's from its 16.16
+  // place (>> 11, then (a - b) >> 1 and (a + b) >> 2, 0x334DE0), anywhere in the subtile.
+  for (int32_t x = 0; x < 3000; x += 37)
+    for (int32_t y = 0; y < 3000; y += 41) {
+      CHECK(subtile_x((x - y) * 16, (x + y) * 8) == x && subtile_y((x - y) * 16, (x + y) * 8) == y);
+      for (const int32_t f : {0, 7, 16, 31}) {
+        const int32_t a = x * 32 + f, b = y * 32 + (31 - f);
+        const int32_t px = (a - b) >> 1, py = (a + b) >> 2;
+        CHECK(std::abs(subtile_x(px, py) - x) <= 1 && std::abs(subtile_y(px, py) - y) <= 1);
+      }
+    }
+  // Which rooms a mark stands in: a room of tiles (10, 20) .. (18, 28) is subtiles 50 .. 89 by 100 .. 139.
+  const std::vector<RoomBox> rooms = {RoomBox{50, 100, 90, 140}, RoomBox{90, 100, 130, 140}};
+  CHECK(in_rooms(rooms, (50 - 100) * 16, (50 + 100) * 8) && in_rooms(rooms, (129 - 139) * 16, (129 + 139) * 8));
+  CHECK(!in_rooms(rooms, (49 - 100) * 16, (49 + 100) * 8) && !in_rooms(rooms, (130 - 120) * 16, (130 + 120) * 8));
+  CHECK(!in_rooms(rooms, (60 - 140) * 16, (60 + 140) * 8) && !in_rooms({}, 0, 0));
   // A boss by its row: the boss flag without Rarity, not an NPC.
   CHECK(boss_row(kMonBoss, 0));
   CHECK(!boss_row(kMonBoss, 1));
@@ -280,6 +301,32 @@ int main() {
     for (const int row : {156, 211, 242, 243, 544, 229, 250, 256, 267, 365, 526}) CHECK(is_boss(row));
     for (int row = 546; row <= 550; ++row) CHECK(!is_boss(row));  // the Putrid Defilers
     CHECK(bosses.size() >= 15 && bosses.size() <= 40);
+    // Align at +0x87: the zombies, the Fallen and the act bosses are enemies; Akara (148), the rat (151), the birds, the
+    // cow (179), the rogue scout (152) are not.
+    // MonStats2 by MonStatsEx (+0x4C), isAtt at its +0x05 & 2.
+    std::vector<uint8_t> mon2;
+    uint32_t mon2_count = 0;
+    CHECK(rows_of(std::string(dir) + "/monstats2.bin", kMonStats2Row, &mon2, &mon2_count) && mon2_count > 400);
+    const auto enemy = [&](uint32_t row) {
+      const size_t base = static_cast<size_t>(row) * 0x1FC;
+      const uint16_t ex = at<uint16_t>(monsters, base + kMonStatsEx);
+      const bool att = ex < mon2_count && (at<uint8_t>(mon2, static_cast<size_t>(ex) * kMonStats2Row + kMon2Flags) & kMon2IsAtt);
+      return server_enemy(at<uint32_t>(monsters, base + 0x3C), at<uint8_t>(monsters, base + kMonAlign), att);
+    };
+    int enemies = 0;
+    for (uint32_t i = 0; i < monster_count; ++i) enemies += enemy(i) ? 1 : 0;
+    // The zombies, the Fallen, the act bosses are; Akara (148), the rat (151), the rogue scout (152), the cow (179),
+    // the Council's hydras (351..353), the fire bolt trap and the chicken are not.
+    for (const uint32_t row : {0u, 19u, 156u, 211u, 242u, 243u, 544u}) CHECK(enemy(row));
+    for (const uint32_t row : {148u, 151u, 152u, 179u, 351u, 352u, 353u}) CHECK(!enemy(row));
+    // What walks a town and is no NPC (2026-11-03): Act 1's chicken and cow, Act 2's bug and scorpion, Act 3's snake,
+    // parrot and fish, Act 5's barbarians, prisoner, injured barbarians, bunny, seagull and catapult spotters, the
+    // hirelings of Acts 2, 3 and 5.
+    for (const uint32_t row : {149u, 179u, 268u, 269u, 318u, 319u, 320u, 522u, 523u, 534u, 535u, 536u, 567u, 568u, 569u,
+                               556u, 738u, 516u, 517u, 518u, 519u, 338u, 359u, 560u, 561u})
+      CHECK(!enemy(row));
+    CHECK(enemies > 400 && enemies < static_cast<int>(monster_count));
+    std::printf("the game's tables: %d of %u monster classes are enemies the map can mark\n", enemies, monster_count);
     // SuperUniques: a row's monster class is a MonStats row.
     CHECK(super_count >= 60 && super_count < 256);
     for (uint32_t i = 0; i < super_count; ++i) CHECK(at<uint32_t>(supers, static_cast<size_t>(i) * 0x3C + 0x08) < monster_count);

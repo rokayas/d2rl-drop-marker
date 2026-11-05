@@ -22,6 +22,8 @@
 #include "itemseed.h"
 #include "log.h"
 #include "loot.h"
+#include "maploot.h"
+#include "mapmarks.h"
 #include "remember.h"
 #include "sites.h"
 #include "terror.h"
@@ -149,6 +151,9 @@ void toggle(const char* how) {
 }
 
 LRESULT CALLBACK subclass_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+  // The window closed in the middle of a game (its close box, Alt+F4): the game shuts down right after, its UI last, and
+  // the map's icons must not be held by then.
+  if (msg == WM_CLOSE) maploot::window_closing();
   // F-keys above F9 arrive as WM_SYSKEYDOWN; accept both, ignore auto-repeat.
   if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lp & (1 << 30)) && static_cast<int>(wp) == toggle_key()) {
     toggle("");
@@ -831,19 +836,95 @@ void draw_panel() {
               "all of its rooms at once, with its own rolls and rules, the way it fills a room you come near, and what "
               "it rolled is on the map within a second or two. Its monsters are made up front too, in their rooms. "
               "What is put on is saved with the map, as what you see yourself is.");
-    cheat_row(cheats::kMapEnemies, "Named enemies on the map",
-              "Unique and super unique monsters, bosses, champions and a terror zone's Heralds get a red cross on the "
-              "automap with their name above it, the way the game marks town folk (a champion pack's name once, in "
+    cheat_row(cheats::kMapEnemies, "Enemies on the map",
+              "Unique and super unique monsters, bosses, champions and a terror zone's Heralds get a red dot ringed "
+              "in orange on the automap with their name above it, as the game names town folk (a champion pack's name once, in "
               "the game's champion blue), however far away they are, from the moment you enter their area: the game "
               "is let make the whole area's monsters as you enter it (it would make a room's as you first came near "
               "it), and the named ones are marked where they stand. They stay marked wherever you go until they die. "
               "Only the ones the game makes at an event come with it: the Chaos Sanctuary's seal bosses and Diablo, "
-              "Baal's waves. Minions and your own pets get none.");
+              "Baal's waves. Minions and your own pets get none, unless the picker below says all enemies.");
+    {
+      const bool on = cheats::enabled(cheats::kMapEnemies) && !cheats::why_not(cheats::kMapEnemies);
+      const float width = ImGui::CalcTextSize(mapmarks::kEnemyTierNames[0]).x + style.FramePadding.x * 4.0f +
+                          ImGui::GetFrameHeight();
+      int tier = cheats::enemy_tier();
+      if (!on) ImGui::BeginDisabled();
+      ImGui::Indent();
+      ImGui::SetNextItemWidth(width);
+      if (ImGui::Combo("Which enemies", &tier, mapmarks::kEnemyTierNames, mapmarks::kEnemyTiers)) {
+        cheats::set_enemy_tier(tier);
+        changed("Enemies on the map", mapmarks::kEnemyTierNames[cheats::enemy_tier()]);
+      }
+      if (!on) ImGui::EndDisabled();
+      help_marker("Named enemies only: the uniques, super uniques, bosses, champions and Heralds, each with its name. "
+                  "All enemies: every other monster that fights you too - minions, the area's ordinary monsters - "
+                  "each with a red dot (no orange ring) and no name, kept where it was last seen until it dies. Town "
+                  "folk, critters, traps and your own pets get none. On the mini map only what fits in its box shows: "
+                  "the full-screen automap shows the whole area.");
+      if (!on) ImGui::BeginDisabled();
+      bool names = cheats::enemy_names();
+      if (ImGui::Checkbox("Names of named enemies", &names)) {
+        cheats::set_enemy_names(names);
+        changed("Names of named enemies on the map", names ? "ON" : "OFF");
+      }
+      ImGui::Unindent();
+      if (!on) ImGui::EndDisabled();
+      help_marker("The name above a named enemy's dot. Off: the dot alone. Other enemies never get a name.");
+    }
     cheat_row(cheats::kMapExits, "Area names at exits",
               "The name of the area each exit leads to is written on the automap, for the area you are in and each "
               "area you enter after it: at a cave's entrance, a dungeon's stairs or a trap door, and at each opening "
               "where one area meets the next (the zone line between two outdoor areas, a town's gate). Where two areas "
               "meet, each side names the other, a little inside its own area.");
+
+    ImGui::Spacing();
+    cheat_row(cheats::kMapChests, "Chests on the map",
+              "Chests get the automap's own chest icon, however far away they are, from the moment you enter their "
+              "area until they are opened: the sparkle chest for the sparkling super chests (and the quest chests, "
+              "whose own icon it is), the coin chest for the others. As for the named enemies, the game is let make "
+              "the whole area's objects as you enter it (the chests it rolls at random as well as the ones its layout "
+              "places), and those still closed are marked. The picker below says which: the super chests only, every "
+              "chest, or everything that opens for loot (urns, jars, bodies, logs, rock piles, tombs, barrels, racks, "
+              "stashes, bookshelves: a grey chest).");
+    {
+      const bool on = cheats::enabled(cheats::kMapChests) && !cheats::why_not(cheats::kMapChests);
+      const float width = ImGui::CalcTextSize(maploot::kTierNames[2]).x + style.FramePadding.x * 4.0f +
+                          ImGui::GetFrameHeight();
+      int tier = cheats::chest_tier();
+      if (!on) ImGui::BeginDisabled();
+      ImGui::Indent();
+      ImGui::SetNextItemWidth(width);
+      if (ImGui::Combo("Which chests", &tier, maploot::kTierNames, maploot::kTiers)) {
+        cheats::set_chest_tier(tier);
+        changed("Chests on the map", maploot::kTierNames[cheats::chest_tier()]);
+      }
+      ImGui::Unindent();
+      if (!on) ImGui::EndDisabled();
+      help_marker("Super chests only: the chests that sparkle, which drop better (Lower Kurast's, a few others). All "
+                  "chests: every chest of every act, the quest chests (the Horadric Cube's, Scroll's and Staff's, "
+                  "Khalim's) and the super chests. Everything openable: those, and everything else you can open for "
+                  "loot, shown as a grey chest - urns, jars, baskets, caskets, bodies (Wirt's too), logs, rock piles, "
+                  "Baal's lair's tombs, barrels, armor stands and weapon racks, Act 3's stashes and the bookshelves of "
+                  "the Barracks and the Jail. One kind of barrel in Act 5's Bloody Foothills, Frigid Highlands and "
+                  "Arreat Plateau is thrown away by the game itself once nobody is near it, so it shows only while you "
+                  "are near.");
+    }
+    cheat_row(cheats::kMapUniques, "Unique items on the map",
+              "A unique item lying on the ground gets a gold star on the automap, wherever it is in the area you are "
+              "in, until it is picked up: what a monster or a chest drops, and what was left behind. Its name is not "
+              "written: Show Items names it when you are near. In legacy graphics, a gold cross.");
+    cheat_row(cheats::kMapSets, "Set items on the map",
+              "A set item lying on the ground gets a green gem on the automap, the same way. In legacy graphics, a "
+              "green cross.");
+    cheat_row(cheats::kMapRunes, "Runes on the map",
+              "A rune lying on the ground gets an orange rune stone on the automap, the same way. In legacy graphics, "
+              "an orange cross.");
+    if (const maploot::Stats ls = maploot::stats();
+        (cheats::enabled(cheats::kMapUniques) || cheats::enabled(cheats::kMapSets) ||
+         cheats::enabled(cheats::kMapRunes)) &&
+        !ls.icons_loaded && ls.icons_why && !cheats::why_not(cheats::kMapUniques))
+      ImGui::TextDisabled("   items shown as crosses: %s", ls.icons_why);
 
     ImGui::Spacing();
     cheat_row(cheats::kAreaLevelAutomap, "Area level in the automap's area name",

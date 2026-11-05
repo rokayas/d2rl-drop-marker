@@ -55,14 +55,24 @@ Press F7, or open the game's Esc menu, and the panel is there.
   the area's layout places them. For the shrines and wells the game rolls at random as it fills a room (Act 3's
   jungle and Kurast, Acts 4 and 5, dungeons), the game fills all of the area's rooms as you enter it, with its own
   rolls, and they are on the map within a second or two.
-- **Named enemies on the map** - unique and super unique monsters, bosses, champions and Heralds get a red cross on
-  the automap with their name, however far away, from the moment you enter their area, until they die: the game is
+- **Enemies on the map** - unique and super unique monsters, bosses, champions and Heralds get a red dot ringed
+  in orange on the automap with their name, however far away, from the moment you enter their area, until they die: the game is
   let make all of an area's monsters as you enter it (it would make each room's as you first came near it), and the
   named ones are marked where they stand. Only the monsters the game makes at an event come with it (the Chaos
-  Sanctuary's seal bosses and Diablo, Baal's waves).
+  Sanctuary's seal bosses and Diablo, Baal's waves). A picker shows the named enemies only, or all enemies (every
+  other monster that fights you gets a red dot, without a ring or a name), and a checkbox hides the named enemies'
+  names. The full-screen automap shows the whole area; the mini map only what fits in its box.
 - **Area names at exits** - the name of the area each exit leads to, on the automap: at a cave's entrance, a
   dungeon's stairs or a trap door, and at each opening where one area meets the next (the zone line between two
   outdoor areas, a town's gate), for the area you are in.
+- **Chests on the map** - every chest of the area you enter gets the automap's own chest icon, however far away, until
+  it is opened: the sparkle chest for the super chests (and the quest chests), the coin chest for the others. A picker
+  chooses which: the super chests only, every chest, or everything that opens for loot (urns, jars, bodies, logs, rock
+  piles, tombs, barrels, racks, Act 3's stashes and the bookshelves too, as a grey chest). One kind of barrel in Act 5's
+  first three areas, which the game itself throws away once nobody is near it, shows only while you are near.
+- **Unique items, set items and runes on the map** - three switches: an item of that kind lying on the ground of the
+  area you are in gets an icon of its own on the automap until it is picked up - a gold star for a unique item, a green
+  gem for a set item, an orange rune stone for a rune - whether it just dropped or was left behind.
 - **Area levels** - each area's monster level for the current difficulty after its name, in the automap's area
   text and in the waypoint list.
 - **Item level** - an item's level after its name in its tooltip, as in "Grand Charm (91)": weapons, armor, rings,
@@ -201,7 +211,7 @@ arguments (`scripts/d2r-loader.sh` does this with umu-run; adapt its paths), wit
   the log has what the plugin found at start-up.
 - The D2RLoader console (Ctrl+` when enabled in the loader's settings) has a `cabbycodes` command:
   `status`, `panel`, `god|mana|stamina|exit|bars|bossbar|map|ilvl on|off`, `landmarks|enemies|exits on|off`
-  (landmarks, named enemies and area names at exits on the map), `exp <multiplier>`, `dmg <multiplier>`,
+  (landmarks, enemies and area names at exits on the map), `enemytier named|all`, `enemynames on|off`, `exp <multiplier>`, `dmg <multiplier>`,
   `speed <percent>`, `merc|minions|unfreezable|unpoisonable|uncursable|tp|id|potions|keys|gold|durability on|off`,
   `passivemerc|passiveminions on|off` (your mercenary or your summons fight nothing),
   `revives on|off` (your revives stay until they die),
@@ -257,8 +267,15 @@ arguments (`scripts/d2r-loader.sh` does this with umu-run; adapt its paths), wit
 | `area_level_waypoints` | `false` | The area's level after each destination in the waypoint list. |
 | `reveal_map` | `false` | The whole map of the area you are in, and of every area you enter after it, on the automap. |
 | `map_landmarks` | `false` | The landmarks the automap shows only once you are near (waypoints, shrines, wells, quest objects and chests, Act 3's sewer stairs and lever) are on it as soon as you enter an area, where its layout places them. For the shrines and wells the game rolls at random as it fills a room (Act 3's jungle, Kurast and Travincal, Acts 4 and 5, the dungeons) the game fills all of an area's rooms as you enter it, with its own rolls and rules, and what it rolled is put on. |
-| `map_named_enemies` | `false` | Unique and super unique monsters, bosses, champions and Heralds get a red cross with their name on the automap however far away they are: super uniques and bosses from the moment you enter their area, random uniques, champions and Heralds from the moment the game makes them (as you first come near their room), until they die. |
+| `map_named_enemies` | `false` | Unique and super unique monsters, bosses, champions and Heralds get a red dot ringed in orange with their name on the automap however far away they are, from the moment you enter their area until they die. |
+| `map_enemy_tier` | `"named"` | Which enemies: `"named"` (those only) or `"all"` (every other monster that fights you too, a red dot without a ring or a name). |
+| `map_enemy_names` | `true` | The named enemies' names beside their cross; `false` the cross alone. |
 | `map_exit_names` | `false` | The name of the area each exit leads to on the automap, for the area you are in: at cave entrances, stairs and trap doors, and at each opening where one area meets the next. |
+| `map_chests` | `false` | Chests on the automap, as the game's own chest icon, from the moment you enter their area until they are opened. |
+| `map_chest_tier` | `"chests"` | Which: `"super"` (the sparkling super chests only), `"chests"` (every chest, the quest chests too) or `"openable"` (everything that opens for loot: chests, and as a grey chest urns, jars, bodies, logs, rock piles, tombs, barrels, racks, stashes, bookshelves; the one kind of Act 5 barrel the game throws away once nobody is near only while you are near). |
+| `map_unique_items` | `false` | A unique item on the ground of the area you are in gets a gold star on the automap until it is picked up. |
+| `map_set_items` | `false` | ... a set item a green gem. |
+| `map_runes` | `false` | ... a rune an orange rune stone. |
 | `item_level` | `false` | An item's level after its name in its tooltip: weapons, armor, rings, amulets, charms and jewels. |
 | `monster_health_bars` | `false` | A short life bar above every enemy on screen (HD graphics). |
 | `boss_health_bar` | `false` | An act boss's name and life at the top centre of the screen while it is near. |
@@ -312,7 +329,11 @@ so, and what you ask for by name.
   It is still a cheat plugin, not a guarantee.
 - **Other plugins.** All hooks into the game go through D2RLoader, which tracks them but cannot put two plugins'
   hooks on one routine. If another plugin owns a routine CabbyCodes needs, that cheat is greyed out with the reason
-  in the panel.
+  in the panel. A routine another plugin has hooked is still found when CabbyCodes only reads or calls it. The map's
+  enemies, area names, chests and items work alongside D2R Reimagined's loot filter (Pyre's) and MapSense, which
+  hook the automap's own unit draw (earlier releases greyed them out next to either). Reimagined's Gem Bag refuses to
+  act while anything is hooked on the game's item notice: CabbyCodes hooks it only once Identify on pickup or a map
+  item switch (uniques, sets, runes) is on, and then until the game is closed.
 - **Overlays.** An overlay that takes the hook the panel is usually drawn from, such as RTSS (MSI Afterburner's
   on-screen display), no longer hides the panel: it is then drawn from the game's own present routine, with the
   overlay's display on top. Earlier releases showed no panel with RTSS running.
@@ -504,6 +525,12 @@ so, and what you ask for by name.
 - **Map reveal** reveals an area as you enter it (a large one fills in over a few frames), once per visit to an
   act. It is the game's own automap, as if you had explored the whole area. Only the map is revealed: monsters,
   chests, shrines and waypoints show on it once you have been near them, as usual.
+- **Chests and items on the map.** The chests of an area are found as you enter it: the game is let make all of the
+  area's rooms at once (as for the named enemies), so the chests it rolls at random are there as well as the ones its
+  layout places, and each keeps its icon until it is opened. Items are what lies on the ground of the area you are in:
+  what monsters and chests drop, read again after each drop, and what was left behind there; an item's icon goes when
+  it is picked up. Only icons are drawn, no names: Show Items names an item when you are near it. In legacy graphics the
+  items are crosses in their colors (gold, green, orange).
 - **Area names at exits** are found as you enter an area: a warp (a cave's entrance, stairs, a trap door) by the
   game's own link between its room and the area at its other end, a border by where its rooms meet the next area's
   and where a player can walk across. Where two areas meet, each names the other on its own side, and only the

@@ -67,6 +67,8 @@ int main() {
   CHECK(!s.passive_mercenary && !s.passive_minions && !s.permanent_revives);
   CHECK(!s.no_enemy_immunities && !s.no_enemy_affixes);
   CHECK(!s.map_named_enemies && !s.map_landmarks && !s.map_exit_names);
+  CHECK(s.map_enemy_tier == 0 && s.map_enemy_names);
+  CHECK(!s.map_chests && s.map_chest_tier == 1 && !s.map_unique_items && !s.map_set_items && !s.map_runes);
   CHECK(s.logging && !s.trace);  // the log is written unless the file says otherwise,
   CHECK(s.log_level == d2rcc::LogLevel::kInfo);  // ... all of it
 
@@ -75,7 +77,7 @@ int main() {
   if (std::ifstream f{"res/cabbycodes.toml", std::ios::binary}) {
     const std::string shipped((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     Settings installed;
-    CHECK(parse(shipped, &installed) == 66);
+    CHECK(parse(shipped, &installed) == 73);
     CHECK(rewrite(shipped, Settings{}) == shipped);
     CHECK(installed.logging && installed.log_level == d2rcc::LogLevel::kInfo && !installed.trace);
   } else {
@@ -118,8 +120,13 @@ int main() {
   s.ignore_requirements = true;
   s.home_town = 5;
   s.reveal_map = true;
+  s.map_enemy_tier = 1;
+  s.map_enemy_names = false;
   s.map_landmarks = true;
   s.map_exit_names = true;
+  s.map_chests = true;
+  s.map_chest_tier = 2;
+  s.map_runes = true;
   s.item_level = true;
   s.remember_automap = true;
   s.remember_show_items_unfiltered = true;
@@ -144,7 +151,10 @@ int main() {
   CHECK(text.find("# Master switch.\r\n") != std::string::npos);
   CHECK(text.find("[d2rl]\r\nmatch = []\r\n") != std::string::npos);
   // Keys the file lacks are appended to the table, in their order, before the next table.
-  CHECK(text.find("reveal_map = true\r\nmap_named_enemies = false\r\nmap_landmarks = true\r\nmap_exit_names = true\r\n"
+  CHECK(text.find("reveal_map = true\r\nmap_named_enemies = false\r\nmap_enemy_tier = \"all\"\r\nmap_enemy_names = false\r\n"
+                  "map_landmarks = true\r\nmap_exit_names = true\r\n"
+                  "map_chests = true\r\nmap_chest_tier = \"openable\"\r\nmap_unique_items = false\r\n"
+                  "map_set_items = false\r\nmap_runes = true\r\n"
                   "item_level = true\r\n"
                   "chronicle_only = true\r\n"
                   "extra_drops_elites_only = true\r\n"
@@ -167,7 +177,7 @@ int main() {
                   "logging = false\r\nlog_level = \"warning\"\r\n\r\n[d2rl]") != std::string::npos);
 
   Settings back;
-  CHECK(parse(text, &back) == 66);
+  CHECK(parse(text, &back) == 73);
   CHECK(back.cannot_be_cursed && back.infinite_gold && back.home_town == 5);
   CHECK(!back.infinite_imbue && back.infinite_sockets && back.infinite_personalize);
   CHECK(back.infinite_cube_ingredients);
@@ -187,6 +197,8 @@ int main() {
   CHECK(!back.infinite_town_portal && !back.infinite_identify && back.infinite_potions && back.auto_identify);
   CHECK(back.infinite_keys && back.no_durability_loss && back.reveal_map && back.item_level);
   CHECK(!back.map_named_enemies && back.map_landmarks && back.map_exit_names);
+  CHECK(back.map_enemy_tier == 1 && !back.map_enemy_names);
+  CHECK(back.map_chests && back.map_chest_tier == 2 && !back.map_unique_items && !back.map_set_items && back.map_runes);
   CHECK(back.remember_automap && !back.remember_show_items && back.remember_show_items_unfiltered);
   CHECK(back.automap_was_open && !back.show_items_was_on && back.show_items_unfiltered_was_on);
 
@@ -198,7 +210,9 @@ int main() {
   CHECK(filled.find("toggle_key = \"INSERT\"\nlogging = false\nlog_level = \"warning\"\ntrace = false\n") !=
         std::string::npos);
   Settings s3;
-  CHECK(parse(filled, &s3) == 66);
+  CHECK(parse(filled, &s3) == 73);
+  CHECK(s3.map_enemy_tier == 1 && !s3.map_enemy_names);
+  CHECK(s3.map_chests && s3.map_chest_tier == 2 && s3.map_runes && !s3.map_unique_items);
   CHECK(s3.cannot_be_cursed && s3.infinite_gold && s3.home_town == 5);
   CHECK(!s3.infinite_imbue && s3.infinite_sockets && s3.infinite_personalize);
   CHECK(s3.infinite_cube_ingredients && s3.auto_identify);

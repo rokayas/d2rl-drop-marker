@@ -31,6 +31,7 @@ enum Scope : int {
   kPresent,        // the present hook, once a frame: everything below it
   kOverlayFrame,   // ... the frame drawn over the game's (the health bars, the panel)
   kMapMarksDraw,   // the named enemies' part of the automap's draw of one unit (each unit the automap draws)
+  kMapLootDraw,    // the chests' and items' part of it (each unit; the icons drawn at the local player's)
   kScopeCount
 };
 

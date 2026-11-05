@@ -58,9 +58,13 @@ enum Kind : int {
   kIgnoreRequirements,  // your character uses any item its class can: an item's level, strength, dexterity not asked
   kIgnoreRequirementsMerc,  // ... and your mercenary any item it can
   kRevealMap,           // the whole map of the area you are in, and of each one you enter, on the automap
-  kMapEnemies,          // named enemies on the automap (a red cross and the name), and their spawn spots
+  kMapEnemies,          // enemies on the automap: named ones (a red cross, their name), or all (the others a smaller one)
   kMapLandmarks,        // the landmarks the automap shows once you are near (waypoints, shrines...), at once
   kMapExits,            // the name of the area each exit leads to, on the automap (cave entrances, stairs, borders)
+  kMapChests,           // chests on the automap (the picker: super chests only, all chests, everything openable)
+  kMapUniques,          // unique items on the ground, on the automap (an icon of their own)
+  kMapSets,             // ... set items
+  kMapRunes,            // ... runes
   kItemLevel,           // an item's level after its name (weapons, armor, rings, amulets, charms, jewels)
   kRememberAutomap,     // a loaded character gets the automap open or closed as it was when a game was last left
   kRememberShowItems,   // ... Show Items on or off (only in the game's Toggle mode for it)
@@ -98,6 +102,12 @@ float damage_multiplier();  // 1 .. 100
 void set_damage_multiplier(float m);
 int home_town();  // 0: the town of the act you are in (the game's own); 1 .. 5: that act's town
 void set_home_town(int act);
+int chest_tier();  // which chests the map shows: 0 super chests only, 1 all chests, 2 everything that opens for loot
+void set_chest_tier(int tier);
+int enemy_tier();  // which enemies the map shows: 0 named enemies only, 1 all enemies
+void set_enemy_tier(int tier);
+bool enemy_names();  // the named enemies' names written on the map
+void set_enemy_names(bool on);
 
 // Why a cheat cannot work right now (a routine not found, a hook refused), or
 // null when it can. Set by hooks_game.cpp, shown by the panel.

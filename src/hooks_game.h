@@ -1,7 +1,8 @@
 #pragma once
 
 // The hooks into the game's own code, installed through D2RLoader so the loader
-// tracks them and other plugins can chain them. Every cheat acts from here, on
+// tracks them (one plugin's hook a routine: a routine another plugin hooked first is
+// never hooked here, sites.h taken_by). Every cheat acts from here, on
 // the game's server thread:
 //   D2GAME_PLAYER_ApplyStatRegen  every frame per player: the tick (refills, speed, status)
 //   SUNITDMG_ExecuteEvents        a hit is about to be applied: exit-before-death clamps it, the damage
@@ -55,7 +56,9 @@
 //   client's NPC menu             infinite imbues, sockets and personalizing (UI thread): as an NPC's menu opens,
 //                                 the item service of its quest is put in it whatever the quest says (npcservice.cpp)
 //   cube products / item free / socket contents free  infinite cube ingredients (cube.cpp)
-//   item notice                   identify on pickup: the pick-up's notice of the item's new place (autoid.cpp)
+//   item notice                   identify on pickup: the pick-up's notice of the item's new place (autoid.cpp), and the
+//                                 map's items taken off it as they are picked up; hooked only once one of those switches
+//                                 is on (install_wanted: Reimagined's Gem Bag UI refuses to act while it is hooked)
 //   AI dispatcher                 passive mercenary and minions: a passive pet's AI tick marks the thread (passive.cpp)
 //   enemy test                    ... and while it is marked, no unit is an enemy (every way an AI finds a target asks
 //                                 the test; any other question gets the game's answer)
@@ -72,9 +75,11 @@
 //                                 the local player, or its mercenary, level, strength and dexterity count as met; the
 //                                 tick has the game work the unit's items out again when a switch changes
 //                                 (requirements.cpp)
-//   automap's draw of one unit    named enemies on the map (the thread that draws the automap): after the game's own
-//                                 marker and name, a named enemy's red cross and name, and at the local player's own
-//                                 call the spawn spots of the super uniques and bosses (mapmarks.cpp)
+//   automap's marker decision     enemies, chests and items on the map (the thread that draws the automap): asked by its
+//                                 draw of one unit for every unit, the view in rdi (a thunk hands it on); after the
+//                                 game's answer an enemy's mark and a named one's name, and at the local player's own
+//                                 call every mark of the layer (mapmarks.cpp, maploot.cpp). The unit draw itself is
+//                                 other plugins' to hook (MapSense, Pyre's loot filter)
 // and two patches, not hooks: the item writer sends the client every item's real level, not only for rows
 // with ShowLevel (so the name has the right number), and the rare affix step's two picks call the affix picker
 // the other steps call (it called D2RCore's picker straight), so best affixes sees them.
@@ -88,6 +93,10 @@ namespace d2rcc::hooks {
 
 bool install();    // after sites::derive() and game::bind(); sets each cheat's why_not
 void uninstall();  // the loader restores the code; this forgets the originals
+// The hooks that wait for a switch: the item notice goes in once identify on pickup or one of the map's item switches
+// is on (another plugin may check that routine's bytes before it acts). Any thread; the watchdog asks after every
+// setting change.
+void install_wanted();
 
 void game_left();  // forget per-game state (the Levels table is read again next game)
 

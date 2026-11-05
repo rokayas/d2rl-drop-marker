@@ -22,7 +22,7 @@ const char* const kNames[kScopeCount] = {
     "  map reveal",             "    of them looking",    "      a room's landmarks", "  automap and Show Items",
     "    of them looking",      "  asking for the next",  "UI message (each)",        "level name asked (each)",
     "mana cost asked (each)",   "server tick",            "  rooms built ahead",      "present (a frame)",
-    "  frame drawn over it",    "automap unit (each)",
+    "  frame drawn over it",    "automap unit (each)",    "automap unit: loot (each)",
 };
 
 bool counts(int scope) { return scope == kBarMonsters || scope == kBarsShown; }

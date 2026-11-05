@@ -28,9 +28,16 @@ struct Settings {
   bool area_level_automap = false;   // the area's level after its name on the automap
   bool area_level_waypoints = false; // ... and in the waypoint list
   bool reveal_map = false;           // the whole map of each area you are in, on the automap
-  bool map_named_enemies = false;    // named enemies on the automap, and the spawn spots of super uniques and bosses
+  bool map_named_enemies = false;    // enemies on the automap (named ones, and the spawn spots of super uniques and bosses)
+  int map_enemy_tier = 0;            // ... which: 0 named enemies only, 1 all enemies (the others a smaller cross, no name)
+  bool map_enemy_names = true;       // ... the named ones' names written beside their cross
   bool map_landmarks = false;        // the landmarks the automap shows once you are near (waypoints, shrines...), at once
   bool map_exit_names = false;       // the name of the area each exit leads to, on the automap
+  bool map_chests = false;           // chests on the automap, until they are opened
+  int map_chest_tier = 1;            // ... which: 0 super chests only, 1 all chests, 2 everything that opens for loot
+  bool map_unique_items = false;     // unique items on the ground, on the automap (a gold star)
+  bool map_set_items = false;        // ... set items (a green gem)
+  bool map_runes = false;            // ... runes (an orange rune stone)
   bool item_level = false;           // an item's level after its name (weapons, armor, jewelry, charms, jewels)
   bool monster_health_bars = false;  // a short life bar above every enemy on screen
   bool boss_health_bar = false;      // an act boss's life at the top centre while it is near
@@ -104,6 +111,10 @@ int key_from_name(const char* name);
 const char* key_name(int vk);  // the canonical name for the file, or a hex string
 
 const char* exit_method_name(ExitMethod m);
+const char* chest_tier_name(int tier);  // "super", "chests", "openable": as the file has it
+bool chest_tier_from_name(const char* name, int* out);
+const char* enemy_tier_name(int tier);  // "named", "all": as the file has it
+bool enemy_tier_from_name(const char* name, int* out);
 const char* log_level_name(LogLevel level);  // "info", "warning", "error": as the file has it
 bool log_level_from_name(const char* name, LogLevel* out);
 

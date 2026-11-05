@@ -19,6 +19,8 @@ volatile LONG g_boss_bar_pos = 0;
 volatile LONG g_extra_drops = 0;
 volatile LONG g_damage_x100 = 100;
 volatile LONG g_home_town = 0;
+volatile LONG g_chest_tier = 1;
+volatile LONG g_enemy_tier = 0, g_enemy_names = 1;
 const char* volatile g_why[kCount] = {};
 
 CRITICAL_SECTION g_status_cs;
@@ -44,8 +46,9 @@ const char* const kNames[kCount] = {"God mode",        "Infinite mana",   "Infin
                                     "Infinite imbues",      "Infinite sockets", "Infinite personalizing",
                                     "Infinite cube ingredients",
                                     "Ignore item requirements", "Ignore item requirements (mercenary)",
-                                    "Reveal the map",       "Named enemies on the map", "Landmarks on the map",
-                                    "Area names at exits",
+                                    "Reveal the map",       "Enemies on the map",   "Landmarks on the map",
+                                    "Area names at exits",  "Chests on the map", "Unique items on the map",
+                                    "Set items on the map", "Runes on the map",
                                     "Item level",      "Keep the automap", "Keep Show Items",
                                     "Keep Show Items (Unfiltered)", "Home town", "The log", "Respec",
                                     "Skill and attribute presets"};
@@ -107,8 +110,15 @@ void init(const config::Settings& s) {
   set_home_town(s.home_town);
   InterlockedExchange(&g_on[kRevealMap], s.reveal_map ? 1 : 0);
   InterlockedExchange(&g_on[kMapEnemies], s.map_named_enemies ? 1 : 0);
+  set_enemy_tier(s.map_enemy_tier);
+  set_enemy_names(s.map_enemy_names);
   InterlockedExchange(&g_on[kMapLandmarks], s.map_landmarks ? 1 : 0);
   InterlockedExchange(&g_on[kMapExits], s.map_exit_names ? 1 : 0);
+  InterlockedExchange(&g_on[kMapChests], s.map_chests ? 1 : 0);
+  set_chest_tier(s.map_chest_tier);
+  InterlockedExchange(&g_on[kMapUniques], s.map_unique_items ? 1 : 0);
+  InterlockedExchange(&g_on[kMapSets], s.map_set_items ? 1 : 0);
+  InterlockedExchange(&g_on[kMapRunes], s.map_runes ? 1 : 0);
   InterlockedExchange(&g_on[kItemLevel], s.item_level ? 1 : 0);
   InterlockedExchange(&g_on[kRememberAutomap], s.remember_automap ? 1 : 0);
   InterlockedExchange(&g_on[kRememberShowItems], s.remember_show_items ? 1 : 0);
@@ -187,6 +197,17 @@ void set_home_town(int act) {
   if (act < 0 || act > 5) act = 0;
   InterlockedExchange(&g_home_town, act);
 }
+
+int chest_tier() { return g_chest_tier; }
+void set_chest_tier(int tier) {
+  if (tier < 0 || tier > 2) tier = 1;
+  InterlockedExchange(&g_chest_tier, tier);
+}
+
+int enemy_tier() { return g_enemy_tier; }
+void set_enemy_tier(int tier) { InterlockedExchange(&g_enemy_tier, tier == 1 ? 1 : 0); }
+bool enemy_names() { return g_enemy_names != 0; }
+void set_enemy_names(bool on) { InterlockedExchange(&g_enemy_names, on ? 1 : 0); }
 
 const char* why_not(Kind k) { return k >= 0 && k < kCount ? g_why[k] : "?"; }
 void set_why_not(Kind k, const char* reason) {
@@ -274,8 +295,15 @@ void to_settings(config::Settings* s) {
   s->home_town = home_town();
   s->reveal_map = g_on[kRevealMap] != 0;
   s->map_named_enemies = g_on[kMapEnemies] != 0;
+  s->map_enemy_tier = enemy_tier();
+  s->map_enemy_names = enemy_names();
   s->map_landmarks = g_on[kMapLandmarks] != 0;
   s->map_exit_names = g_on[kMapExits] != 0;
+  s->map_chests = g_on[kMapChests] != 0;
+  s->map_chest_tier = chest_tier();
+  s->map_unique_items = g_on[kMapUniques] != 0;
+  s->map_set_items = g_on[kMapSets] != 0;
+  s->map_runes = g_on[kMapRunes] != 0;
   s->item_level = g_on[kItemLevel] != 0;
   s->remember_automap = g_on[kRememberAutomap] != 0;
   s->remember_show_items = g_on[kRememberShowItems] != 0;

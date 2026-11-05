@@ -28,6 +28,7 @@
 #include "itemseed.h"
 #include "loot.h"
 #include "hometown.h"
+#include "maploot.h"
 #include "mapmarks.h"
 #include "roomfill.h"
 #include "movespeed.h"
@@ -113,8 +114,9 @@ using PortalTripFn = uint64_t(__fastcall*)(Unit* player, Unit* portal) noexcept;
 using NpcMenuFn = uint64_t(__fastcall*)(Unit* npc, int32_t after_speech) noexcept;
 // God mode: whether a stat of a kind of unit may go down (the stat, the unit type) -> nonzero when it may not.
 using ProtectedStatFn = bool(__fastcall*)(int32_t stat, int32_t unit_type) noexcept;
-// Named enemies on the map: the automap's draw of one unit (the unit, the automap's view).
-using AutomapUnitFn = void(__fastcall*)(Unit* unit, const void* view) noexcept;
+// Enemies, chests and items on the map: the automap's marker decision (the unit, the marker out, the name's kind out)
+// -> whether the game draws a marker for the unit. Its one caller, the automap's draw of one unit, holds the view in rdi.
+using MarkerDecisionFn = bool(__fastcall*)(Unit* unit, int32_t* marker, int32_t* name_kind) noexcept;
 
 ExecuteEventsFn g_orig_execute = nullptr;
 FinalizeDamageFn g_orig_finalize = nullptr;
@@ -176,8 +178,13 @@ enemies::ModAddFn g_orig_mod_add = nullptr;
 enemies::ModTestFn g_orig_mod_test = nullptr;
 enemies::ModsRunFn g_orig_mods_run = nullptr;
 enemies::ClientModsFn g_orig_client_mods = nullptr;
-// Named enemies on the map: the automap's draw of one unit (mapmarks.h).
-AutomapUnitFn g_orig_automap_unit = nullptr;
+// Enemies, chests and items on the map: the automap's marker decision (mapmarks.h, maploot.h).
+MarkerDecisionFn g_orig_marker_decision = nullptr;
+// Identify on pickup, and the map's items taken off it as they are picked up: the item notice. Hooked only once one of
+// those switches is on: another plugin may check that routine's bytes (Reimagined's Gem Bag UI does, before every
+// withdrawal and deposit, and refuses them while anything is hooked there).
+constexpr LONG kNoticeUnbound = 0, kNoticeWaiting = 1, kNoticeInstalling = 2, kNoticeIn = 3, kNoticeRefused = 4;
+volatile LONG g_notice_state = kNoticeUnbound;
 volatile LONG g_pay_seen = 0;          // the first payments not taken are logged
 volatile LONG g_hit_wear_seen = 0;     // the first skipped wear of each kind is logged
 volatile LONG g_impale_wear_seen = 0;
@@ -423,6 +430,12 @@ void tick(void* game, Unit* player) {
       (on(cheats::kMapLandmarks) || on(cheats::kMapEnemies) || on(cheats::kMapExits)) && !mapmarks::ready(bank) &&
       (st.ticks % 125) == 1)
     mapmarks::collect();  // the object icons, monsters' kinds and names, and the areas' names the map's marks read
+  if (const uint8_t bank = game::unit_table_bank(player);
+      (on(cheats::kMapChests) || on(cheats::kMapUniques) || on(cheats::kMapSets) || on(cheats::kMapRunes) ||
+       on(cheats::kMapLandmarks) || on(cheats::kMapEnemies)) &&
+      !maploot::ready(bank) && (st.ticks % 125) == 1)
+    maploot::collect();  // which objects open for loot and which items are runes (the map's chests and items); which
+                         // levels keep their units as their rooms are let go (the room fill reads ahead no other)
   roomfill::on_tick(game, player, st.ticks);  // an area entered: its rooms built ahead for the game to fill
   hometown::on_tick(game, player, st.ticks);  // the acts' towns, and the ones the character can reach
   npcservice::on_tick();  // an NPC's service switched on: no quest asks for it in the game's NPC table
@@ -752,6 +765,7 @@ void __fastcall hk_tc_drop(void* game, Unit* source, Unit* killer, const void* t
   if (g_orig_tc_drop)
     loot::drop(g_orig_tc_drop, game, source, killer, tc, forced_quality, item_level, skip_nodrop, out, out_count,
                out_max);
+  maploot::dropped(source);  // the area's items read again for the map; an object's drop: its chests too (one opened)
 }
 
 // Every freshly made item's quality is decided here first: superior, ethereal and socketed where the game allows.
@@ -772,11 +786,13 @@ int32_t __fastcall hk_property_roll(Unit* unit, int32_t a, int32_t b) noexcept {
 // defense: the seed a save keeps with the item, handed to the game's own creation routine (itemseed.cpp). Under
 // the loot filter switch a drop is made only in a form the filter shows (loot.cpp says which through the request,
 // which gets its own back after), and one the filter hides in every form is not made: the drop core gets no item,
-// as it does from the game's item maker when there is no room for one.
+// as it does from the game's item maker when there is no room for one. An object's own item on the ground (a rack's, a
+// bookshelf's, Wirt's body's: made without the drop core) tells the map that object was opened.
 Unit* __fastcall hk_create_item(void* game, uint8_t* request, int32_t use_seeds) noexcept {
   if (loot::refuse(request)) return nullptr;
   Unit* const item = itemseed::create(g_orig_create_item, game, request, use_seeds);
   loot::made(request, item);
+  maploot::item_made(request, item);
   return item;
 }
 
@@ -950,14 +966,6 @@ uint64_t __fastcall hk_npc_menu(Unit* npc, int32_t after_speech) noexcept {
   return g_orig_npc_menu ? g_orig_npc_menu(npc, after_speech) : 0;
 }
 
-// The automap's draw of one unit (the thread that draws the automap): the game's marker and name first, then under
-// the switch a named enemy's red cross and name, and at the local player's own call the named enemies' spawn spots
-// (mapmarks.cpp, with the game's own drawing calls).
-void __fastcall hk_automap_unit(Unit* unit, const void* view) noexcept {
-  if (g_orig_automap_unit) g_orig_automap_unit(unit, view);
-  mapmarks::unit_drawn(unit, view);
-}
-
 // A cube recipe's products (the transmute's second pass, after the characters were saved). Under the switch the
 // ingredients the routine uses up, and what Clear Sockets takes out of the sockets, are kept by the two frees below
 // and handed back to the player once the routine is through (cube.cpp).
@@ -986,8 +994,10 @@ void __fastcall hk_socketed_free(void* game, Unit* item) noexcept {
 // address says which call it is): under the switch the local player's item is identified around it (autoid.cpp).
 void __fastcall hk_item_notice(void* game, Unit* player, Unit* item, uint32_t flags, uint32_t command, int32_t mode,
                                uint32_t page, uint32_t body, uint32_t position) noexcept {
-  autoid::notice(g_orig_item_notice, game, player, item, flags, command, mode, page, body, position,
-                 reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+  const uintptr_t from = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+  autoid::notice(g_orig_item_notice, game, player, item, flags, command, mode, page, body, position, from);
+  // The pick-up's own notice: the item is off the ground (its icon on the map goes).
+  if (sites::identify_facts().known && from == sites::identify_facts().pickup_notice) maploot::picked_up(item);
 }
 
 // A monster's AI tick: every monster's, the mercenary's and every summon's included, comes here. For a pet of the
@@ -1155,7 +1165,16 @@ bool install_one(sites::Id id, Fn detour, Fn* original, const char* what) {
   uint8_t expected[128];  // the longest signature of a hooked routine has 96 bytes (the kept target's getter)
   const size_t n = sites::entry_bytes(id, expected, sizeof(expected));
   if (!ctx || !n) {
-    log_warn("hooks: %s not resolved - not hooked", what);
+    if (const char* other = sites::taken_by(id))
+      log_error("hooks: %s not hooked - another plugin's hook has its entry (a jump to %s), and the loader takes one "
+                "hook a routine",
+                what, other);
+    else if (sites::found(id))
+      log_error("hooks: %s not hooked - its entry is no longer the game's code (another plugin's hook since the image "
+                "was read?)",
+                what);
+    else
+      log_warn("hooks: %s not resolved - not hooked", what);
     return false;
   }
   const uint64_t rva = sites::result(id).rva;
@@ -1283,7 +1302,63 @@ extern "C" __attribute__((naked)) void d2rcc_protected_stat_thunk() noexcept {
       "jmp d2rcc_protected_stat_impl");
 }
 
+// --- the automap's marker decision (enemies, chests and items on the map) -------------------------------------------
+// The automap's draw of one unit (the thread that draws the automap) asks the game's marker decision first, for every
+// unit of the rooms near the player, with the view it draws in held in rdi. The game's answer stands, and then under
+// the switches a named enemy's mark and name (and another enemy's dot) are drawn and the local player's own call draws
+// the marks of the whole layer (mapmarks.cpp, with the game's own drawing calls), and the chests and the unique, set and
+// rune items the client knows are noted and, at the local player's call, drawn as icons (maploot.cpp); the game then
+// draws the unit's own marker, if any, over them. The unit draw itself is not hooked: other plugins hook it (MapSense,
+// Pyre's loot filter: Reimagined's), and the loader takes one hook a routine. Only the unit draw's own call (its return
+// address) is taken; the view is that call's rdi.
+extern "C" bool d2rcc_marker_decision_impl(d2rcc::game::Unit* unit, int32_t* marker, int32_t* name_kind,
+                                           const void* view) noexcept {
+  using namespace d2rcc;
+  using namespace d2rcc::hooks;
+  const bool drawn = g_orig_marker_decision ? g_orig_marker_decision(unit, marker, name_kind) : false;
+  if (reinterpret_cast<uintptr_t>(__builtin_return_address(0)) == sites::map_facts().decision_return && view) {
+    mapmarks::unit_drawn(unit, view);
+    maploot::unit_drawn(unit, view);
+  }
+  return drawn;
+}
+
+// The unit draw's rdi (the view) as a fourth argument; the impl answers the unit draw itself.
+extern "C" __attribute__((naked)) void d2rcc_marker_decision_thunk() noexcept {
+  asm("movq %rdi, %r9\n\t"
+      "jmp d2rcc_marker_decision_impl");
+}
+
 namespace d2rcc::hooks {
+
+namespace {
+// The switches that need the item notice: identify on pickup, and the map's items, whose icons go as it says they were
+// picked up.
+bool notice_wanted() {
+  return cheats::enabled(cheats::kAutoIdentify) || cheats::enabled(cheats::kMapUniques) ||
+         cheats::enabled(cheats::kMapSets) || cheats::enabled(cheats::kMapRunes);
+}
+}  // namespace
+
+void install_wanted() {
+  if (g_notice_state != kNoticeWaiting || !notice_wanted()) return;
+  if (InterlockedCompareExchange(&g_notice_state, kNoticeInstalling, kNoticeWaiting) != kNoticeWaiting) return;
+  // The loader writes the original's pointer before it turns the hook on: a notice the game sends meanwhile goes
+  // through either way.
+  const bool in = install_one(sites::kItemNotice, &hk_item_notice, &g_orig_item_notice, "item notice");
+  InterlockedExchange(&g_notice_state, in ? kNoticeIn : kNoticeRefused);
+  if (!in) {
+    cheats::set_why_not(cheats::kAutoIdentify, "item notice not hooked");
+    return;
+  }
+  const char* by = cheats::enabled(cheats::kAutoIdentify) ? "identify on pickup"
+                   : cheats::enabled(cheats::kMapUniques) ? "unique items on the map"
+                   : cheats::enabled(cheats::kMapSets)    ? "set items on the map"
+                                                          : "runes on the map";
+  logf("hooks: the item notice is hooked now that %s is on (it stays until the game is closed; a plugin that checks "
+       "that routine's bytes before it acts, Reimagined's Gem Bag UI, refuses to act from here on)",
+       by);
+}
 
 bool install() {
   // The panel's, whatever else binds: the game's present routine, for when another hook takes DXGI's Present.
@@ -1465,9 +1540,14 @@ bool install() {
     logf("hooks: infinite cube ingredients leaves what Clear Sockets takes out of the sockets to the game: destroyed");
   // Identify on pickup: the item notice, which acts only on the pick-up routine's call (its return address, read by
   // sites.cpp); inside it the game's identify routine.
+  // The map's unique, set and rune items lose their icons as the same notice says they were picked up. The notice is
+  // hooked only once one of those switches is on (now, or later from the watchdog: install_wanted).
   const char* autoid_why = autoid::bind();
-  const bool item_notice =
-      !autoid_why && install_one(sites::kItemNotice, &hk_item_notice, &g_orig_item_notice, "item notice");
+  InterlockedExchange(&g_notice_state, autoid_why ? kNoticeUnbound : kNoticeWaiting);
+  if (!autoid_why && !notice_wanted())
+    logf("hooks: the item notice is hooked only once identify on pickup or the map's unique, set or rune items are "
+         "switched on (another plugin may check that routine's bytes: Reimagined's Gem Bag UI does)");
+  install_wanted();
   // Passive mercenary and minions: the enemy test and the kept target's getter first (they answer as the game does
   // while no tick is marked), then the AI dispatcher, which marks a passive pet's.
   const char* passive_why = passive::bind();
@@ -1499,11 +1579,13 @@ bool install() {
   const bool requirement_test =
       !requirements::why_not_player() &&
       install_one(sites::kItemRequirements, &hk_item_requirements, &g_orig_requirements, "item requirement test");
-  // Named enemies on the map: the automap's draw of one unit, after which a named enemy is drawn (mapmarks.cpp, which
-  // sets the switch's why_not once it is bound).
-  mapmarks::set_draw_hooked(game::has_map_draw() &&
-                            install_one(sites::kAutomapUnitDraw, &hk_automap_unit, &g_orig_automap_unit,
-                                        "automap's draw of one unit"));
+  // Enemies, chests and items on the map: the automap's marker decision, which its draw of one unit asks first for each
+  // unit, the view in rdi (mapmarks.cpp and maploot.cpp set their switches' why_not once they are bound). The unit draw
+  // itself is left to the plugins that hook it.
+  mapmarks::set_draw_hooked(game::has_map_draw() && sites::map_facts().decision &&
+                            install_one(sites::kAutomapMarkerDecision,
+                                        reinterpret_cast<MarkerDecisionFn>(&d2rcc_marker_decision_thunk),
+                                        &g_orig_marker_decision, "automap's marker decision"));
 
   cheats::set_why_not(cheats::kGodMode, g_life_guarded || execute ? nullptr : "damage routines not hooked");
   cheats::set_why_not(cheats::kInfiniteMana, regen ? nullptr : "stat regeneration not hooked");
@@ -1603,9 +1685,9 @@ bool install() {
                                                          : !item_free     ? "item free not hooked"
                                                          : !cube_products ? "cube routine not hooked"
                                                                           : nullptr);
-  cheats::set_why_not(cheats::kAutoIdentify, autoid_why    ? autoid_why
-                                             : !item_notice ? "item notice not hooked"
-                                                            : nullptr);
+  cheats::set_why_not(cheats::kAutoIdentify, autoid_why                          ? autoid_why
+                                             : g_notice_state == kNoticeRefused ? "item notice not hooked"
+                                                                                 : nullptr);
   cheats::set_why_not(cheats::kHomeTown, !regen       ? "stat regeneration not hooked"
                                          : portal_why ? portal_why
                                          : !portals   ? "portal routines not hooked"
@@ -1633,6 +1715,7 @@ bool install() {
 }
 
 void uninstall() {
+  InterlockedExchange(&g_notice_state, kNoticeUnbound);  // nothing is hooked from here on
   npcservice::restore();  // every NPC's record as the game has it
   g_orig_regen = nullptr;
   g_orig_execute = nullptr;
@@ -1685,7 +1768,7 @@ void uninstall() {
   g_orig_kept_target = nullptr;
   g_orig_killself = nullptr;
   g_orig_requirements = nullptr;
-  g_orig_automap_unit = nullptr;
+  g_orig_marker_decision = nullptr;
   cube::hooked(false);
   hometown::wake_hooked(false);
   g_book_debit_return = 0;

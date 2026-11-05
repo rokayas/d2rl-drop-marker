@@ -217,8 +217,9 @@ enum Id : int {
   // Named enemies on the map (client, the thread that draws the automap). The automap's pass over the units of the rooms
   // near the player's draws each through one routine: the game's marker decision says which marker and which name,
   // then the unit's place goes through the automap's transform and the marker and the name are drawn.
-  kAutomapUnitDraw,      // (unit, the automap's view): one unit's marker and name on the automap (hooked); its calls
-                         // name the transform, the marker and name draws and the client's unit name (derived below)
+  kAutomapUnitDraw,      // (unit, the automap's view): one unit's marker and name on the automap. Read only (other
+                         // plugins hook it: MapSense, Pyre's loot filter): its calls name the marker decision (hooked,
+                         // below), the transform, the marker and name draws and the client's unit name
   kCollisionFlags,       // (room, x, y, mask) -> u16: a subtile's collision flags in the room's map. Read only: where
                          // a built room keeps its collision map, and the map's layout (area names at exits)
   kWarpTilePreset,       // (bank, DRLG room, tile x, y, tile flags, orientation): a warp tile's preset unit, of type 5
@@ -271,6 +272,16 @@ enum Id : int {
                          // +0x50 the sync interval; IDXGISwapChain::Present by its table (slot 8). Callers: the DX12
                          // renderer's pm_dx12::CmdQueue::Present and the DX11 renderer's two (hooked: the panel drawn
                          // there when another hook took Present's entry and left the panel's out)
+  // Chests, uniques, sets and runes on the map (maploot.cpp): the automap draws its cells and its unit crosses through
+  // the game's sprite draw; read, never hooked.
+  kAutomapListDraw,      // (tileset, list, view, opacities): each cell of one of a layer's lists drawn where it goes
+                         // (its tile sprite from the tileset's chunks), through the sprite draw. Read only
+  kAutomapMarkerInit,    // (): the automap's tilesets set up and its unit crosses' sprite loaded ("AUTOMAP/Units")
+                         // through the game's sprite loader. Read only: the loader and the crosses' sprite
+  // Enemies, chests and items on the map: the automap's draw of one unit asks this first, for every unit of the rooms
+  // near the player, with the view in rdi and the unit in rbp (callee-saved) all the while. Its one caller.
+  kAutomapMarkerDecision,  // (unit, int* marker, int* name kind) -> whether the game draws a marker for the unit, and
+                           // which marker and which name (hooked: the unit draw itself is left to other plugins)
   kCount
 };
 
@@ -342,10 +353,17 @@ struct Result {
   uint64_t rva = 0;  // the routine's RVA: the first match minus Spec::offset (0 = none)
   int hits = 0;      // how many matches the image has (1 is what a usable site needs)
   uint64_t all[4] = {};  // up to four match RVAs, for the sites that legitimately have two
+  uintptr_t taken_to = 0;  // another plugin's hook on the routine: where the jump over its entry leads (0: none)
 };
 
 const Spec& spec(Id id);
 const Result& result(Id id);
+// A routine another plugin has hooked (the loader's hooks write a 5-byte jump over its entry and leave the rest as it
+// was) is found by its signature less those bytes: the routine can be read and called (a call goes through that
+// hook, as the game's own do), never hooked by this plugin. Where the hook's jump leads ("pyre-lootfilter.dll+0x1A2B"),
+// or null when the entry is the game's own code.
+const char* taken_by(Id id);
+int taken_count();  // how many of the routines found have their entry taken by another plugin's hook
 inline bool found(Id id) { return result(id).hits == 1; }
 uintptr_t address(Id id);      // exe base + rva, or 0 when not found exactly once
 uintptr_t derived(Derived d);  // 0 when not derived
@@ -518,6 +536,9 @@ struct MapFacts {
   uintptr_t draw_name = 0;     // (UTF-8 text, x | y << 32, float scale, color): a name above that point
   uintptr_t unit_name = 0;     // (unit) -> UTF-8: the client's name of a unit (a unique monster's own name)
   int name_color = 0;          // the color the game draws an NPC's name in on the automap
+  bool decision = false;          // the unit draw asks the marker decision found first, with the view in rdi and the
+                                  // unit in rbp (`mov rdi, rdx`, `mov rbp, rcx` before the call)
+  uintptr_t decision_return = 0;  // where that call returns to in the unit draw: the decision's only caller
   // Area names at exits: how a built room is linked to the rooms of the areas next to it.
   bool exits = false;          // the near rooms, the warp links, the warp tiles' presets and the collision map as read
   int near_at = 0;             // a DRLG room: its near rooms {DRLG room* array, u64 count} (other areas' among them)
@@ -533,10 +554,37 @@ struct FillFacts {
   bool known = false;          // the fill pass's steps, the room's state and the unit walk are as read
   int room_state_at = 0;       // an ActiveRoom: its state, whose filled bit the pass tests and sets
   uint32_t filled_bit = 0;
+  uint32_t monsters_bit = 0;   // ... and its monsters' bit, which the pass sets in both of its branches: a room filled
+                               // before (the server let it go and it was built again) has only its units made again
+                               // (0x503790: its saved ones), and has the filled bit from the start (0 not known)
   int room_units_at = 0;       // ... its first unit (the pick-up's walk: 0x2EFD90)
   int unit_next_at = 0;        // a unit: the next of its room (0x34B4A0)
 };
 const FillFacts& fill_facts();
+// Icons on the map (maploot.cpp): the game's sprite routines, the automap's crosses and its tiles, read from the
+// automap's marker draw, its list draw and the routine that loads its crosses (not known: nothing is taken for
+// granted). A sprite object is 0x10 bytes {HD sprite, legacy sprite}; the draw's options are a block of 0xA4 bytes:
+// +0x00 a tint (four floats, {1, 1, 1, 0} none), +0x10 the opacity (a float), +0x18 the frame, the rest 0.
+struct SpriteFacts {
+  bool known = false;            // all of the below is as read
+  uintptr_t draw = 0;            // (sprite object, int32 place[2], options, float scale): the game's sprite draw
+  uintptr_t load = 0;            // (sprite object, const char* name, u8 0): the game's sprite loader (a name under
+                                 // data/hd/global/ui/, ".sprite" after it)
+  uintptr_t crosses = 0;         // the automap's unit crosses' sprite object (8 frames)
+  uintptr_t cross_size = 0;      // ... a frame's width and height (two int32), centred on the point they mark
+  int crosses_count = 0;         // the frames the marker draw takes
+  int hd_frames_at = 0;          // an HD sprite: its frame count (the frame count getter's read)
+  int hd_width_at = 0;           // ... a frame's width and height (the frame size getter's reads)
+  int hd_height_at = 0;
+  // The automap's tiles, tileset 0 (the one the layers' icons are drawn from).
+  uintptr_t tile_chunks = 0;     // {sprite objects (0x10 bytes each), u64 count}
+  uintptr_t tile_per_chunk = 0;  // int32: the tiles of a chunk
+  uintptr_t tile_total = 0;      // int32: all of the tileset's tiles
+  int32_t tile_dy = 0;           // tileset 0's y offset (its record in the table the list draw reads)
+  int cell_left = 0;             // the list draw: a cell's x less this, its y plus cell_down, before the scale
+  int cell_down = 0;
+};
+const SpriteFacts& sprite_facts();
 // Ignore item requirements (requirements.cpp), read from the requirement test's own code and the routines it calls (not
 // known: nothing is taken for granted). Past level, strength and dexterity the test asks, in this order: the item's
 // identified flag; a tome's quantity; the restricted-socket test, at the item type's two body locations (both must
@@ -620,7 +668,8 @@ struct NameFacts {
 const NameFacts& name_facts();
 uintptr_t call_target(Id site);  // where a call-site entry's `call rel32` goes (0 when unknown or not a call)
 uintptr_t exe_base();
-// The live bytes at a routine's entry (the signature's span), for the loader's expected-bytes checks.
+// The live bytes at a routine's entry (the signature's span), for the loader's expected-bytes checks: 0 when they are
+// no longer the signature's (another plugin's hook over the entry), so that no hook goes over another's.
 size_t entry_bytes(Id id, uint8_t* out, size_t capacity);
 
 // True once the image is decrypted: the probe signature (a routine the loader does not patch) matches.

@@ -67,6 +67,7 @@ uint32_t unit_type(Unit* u);
 uint32_t unit_class(Unit* u);
 uint32_t unit_id(Unit* u);
 uint32_t unit_mode(Unit* u);
+int object_sparkle(Unit* u);  // a server object's sparkle byte (1 a super chest), -1 when it cannot be read
 bool unit_dead_flag(Unit* u);
 bool unit_is_dead(Unit* u);             // the dead flag, or a dying or dead mode
 bool unit_can_be_attacked(Unit* u);     // the game's own flag: never on hydras and the like
@@ -306,6 +307,7 @@ int level_layer(uint8_t bank, int level_id);  // the layer the game keeps a leve
 int level_type(uint8_t bank, int level_id);   // the level's type, what the automap's tile lookup is asked for (-1)
 void* level_first_room(void* level);
 void* room_next(void* room);
+bool room_tiles(void* room, int32_t* x, int32_t* y, int32_t* w, int32_t* h);  // a DRLG room's place, in tiles
 // CreateActiveRoom found: a DRLG room can be built (the client's for the map reveal, the server's for the rooms an area
 // is filled with ahead: the same routine on either side's DRLG, on the thread that owns it).
 bool has_room_build();
@@ -337,6 +339,24 @@ void map_name(const char* text, uint64_t point, float scale, int color);
 int map_name_color();                     // the color the game draws an NPC's name in there
 const char* client_unit_name(Unit* u);    // the client's name of a unit: a unique monster's own name (UI thread)
 bool unit_pixels(Unit* u, int32_t* x, int32_t* y);  // where a unit is drawn (its path's pixels), any type
+// Icons on the automap (maploot.cpp), inside the same draw: the game's sprite draw puts a frame of a sprite object at a
+// place of the automap's screen, scaled, tinted (1, 1, 1: none). The automap's tiles (tileset 0, which its object icons
+// come from) and its unit crosses are sprite objects of its own; the game's sprite loader loads one by name (a path
+// under data/hd/global/ui/ without ".sprite"). A sprite object is 0x10 bytes, zero before it is loaded.
+bool has_map_sprites();
+struct MapView {
+  int32_t cx = 0, cy = 0, ox = 0, oy = 0;  // the view's centre and origin
+  float sx = 1.0f, sy = 1.0f;              // ... its scale of a cell
+  float scale = 1.0f;                      // ... the scale its icons and crosses are drawn at
+};
+bool map_view(const void* view, MapView* out);
+const void* map_tile_sprite(int cell, int* frame);                // the automap's tile of a cell, and its frame
+const void* map_cross_sprite(int32_t* width, int32_t* height);    // the crosses' sprite, a frame's size
+void map_draw_sprite(const void* sprite, int frame, int32_t x, int32_t y, float scale, float r, float g, float b);
+bool load_sprite(void* sprite, const char* name);  // UI thread: whether the object holds a sprite after it
+bool release_sprite(void* sprite);                 // UI thread: what the object holds let go (whether it held any)
+int sprite_frames(const void* sprite);             // an HD sprite's frames, 0 when the object holds none
+bool sprite_size(const void* sprite, int32_t* width, int32_t* height);  // ... and a frame's size
 
 // Three keys, on the client's side (UI thread, where the game runs its key bindings and opens its panels):
 // the Automap key (Tab) and the two Show Items keys. What they show is read where the game's own getters

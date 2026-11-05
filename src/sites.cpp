@@ -554,7 +554,7 @@ const Spec kSpecs[kCount] = {
      0, 0x4FF3B0},
     // The automap's draw of one unit: the view kept in rdi, the unit in rbp; the marker decision (the call, with the
     // marker at [rsp+60h] and the name's kind at [rsp+68h]), then the party option (`cmp dword [rip+disp], 0`) for the
-    // party's markers 1 and 4.
+    // party's markers 1 and 4. Its first instruction is 5 bytes, the jump another plugin's hook writes over it.
     {kAutomapUnitDraw, "automap: draw one unit (marker and name)",
      "48 89 6C 24 10 57 48 83 EC 40 48 8B FA 4C 8D 44 24 68 48 8D 54 24 60 48 8B E9 E8 ?? ?? ?? ?? 84 C0 0F 84 ?? ?? "
      "?? ?? 83 3D ?? ?? ?? ?? 00 75 16 83 7C 24 60 01 0F 84 ?? ?? ?? ?? 83 7C 24 60 04 0F 84 ?? ?? ?? ??",
@@ -663,9 +663,32 @@ const Spec kSpecs[kCount] = {
      "48 89 5C 24 18 48 89 54 24 10 57 48 83 EC 40 4D 8B C8 48 8B DA 48 8B F9 45 33 C0 44 38 81 80 00 00 00 74 19 45 "
      "39 41 50 75 13 45 38 41 38 75 0D B8 00 02 00 00 45 38 41 39 44 0F 45 C0 49 8B 09 48 8B 01 41 8B 51 50 FF 50 40",
      0, 0x109F4C0},
+    // The automap's list draw: the tileset in ecx (its record 0x58 bytes, `imul r8, rax, 58h`), the view in r8 (kept
+    // in r15), the opacities in r9 (r12); the image base in rdi (`lea rdi, [rip - x]`) and the tileset's offsets read
+    // from a table by it (`mov rdi, [rdi + rax*8 + disp32]`), then the view's +0x0C.
+    {kAutomapListDraw, "automap: draw a layer's list of cells",
+     "48 89 5C 24 10 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 50 FF FF FF 48 81 EC B0 01 00 00 48 8B 05 ?? ?? ?? "
+     "?? 48 33 C4 48 89 85 80 00 00 00 48 63 C1 48 8D 3D ?? ?? ?? ?? 4D 8B F8 4C 89 44 24 60 4C 6B C0 58 89 44 24 4C "
+     "4D 8B E1 48 8B BC C7 ?? ?? ?? ?? 41 8B 47 0C",
+     0, 0xD6F10},
+    // The automap's set-up of its tilesets (each record 0x58 bytes: `imul rcx, rbx, 58h`, four of them) and of its unit
+    // crosses' sprite, whose load and frame count are read below.
+    {kAutomapMarkerInit, "automap: tilesets and the crosses' sprite set up",
+     "48 89 5C 24 18 48 89 6C 24 20 56 57 41 56 48 83 EC 40 0F 29 74 24 30 48 8D 35 ?? ?? ?? ?? F3 0F 10 35 ?? ?? ?? "
+     "?? 48 8D 2D ?? ?? ?? ?? 0F 29 7C 24 20 4C 8D 35 ?? ?? ?? ?? F3 0F 10 3D ?? ?? ?? ?? 33 FF",
+     0, 0xD6920},
+    // The automap's marker decision: the unit kept in rsi, the marker's out in rdi and the name kind's in rbx, both
+    // asserted non-null; then the unit's type (a player, a monster, an object; anything else is drawn with no marker).
+    // Its prologue (push, push, push, sub: 8 bytes, nothing relative) is where the hook goes.
+    {kAutomapMarkerDecision, "automap: which marker and name a unit gets",
+     "40 53 56 57 48 83 EC 60 49 8B D8 48 8B FA 48 8B F1 48 85 D2 74 05 48 85 DB 75 1A 48 8D 8C 24 88 00 00 00 C6 84 "
+     "24 88 00 00 00 00 E8 ?? ?? ?? ?? 84 C0 74 01 CC 48 89 AC 24 80 00 00 00 48 8B CE 4C 89 64 24 58 4C 89 6C 24 50 "
+     "4C 89 74 24 48 4C 89 7C 24 40 E8 ?? ?? ?? ?? 85 C0 0F 84",
+     0, 0xD78F0},
 };
 
 Result g_results[kCount];
+char g_taken_by[kCount][96];  // where another plugin's hook over a routine's entry leads, for the log and the hooks
 uintptr_t g_derived[dCount];
 uintptr_t g_base = 0;
 int g_unit_next = 0;
@@ -693,6 +716,7 @@ int g_mods_at = 0;
 uintptr_t g_mod_makers = 0;
 uintptr_t g_client_mods = 0;
 NameFacts g_names;
+SpriteFacts g_sprite;
 
 // The bytes of an instruction's RIP-relative operand, as an absolute address.
 uintptr_t rip_operand(uintptr_t insn, int disp_at, int len) {
@@ -741,12 +765,70 @@ uintptr_t find_in(uintptr_t from, size_t span, const char* pattern) {
   return hits.empty() ? 0 : from + hits[0];
 }
 
+// Another plugin's hook over a routine's entry: the loader's hooks (MinHook's) write a `jmp rel32` over the first
+// five bytes and leave every byte after them as it was (the rest of an instruction they cut too). A signature that
+// starts at the entry is then looked for without those five bytes, and a match counts only where its entry is such
+// a jump out of the image, to the hook's code. Its offsets in `copy` (the .text snapshot at `text`); `to` gets where
+// the jump of the first one leads.
+constexpr size_t kHookJump = 5;
 
+std::vector<size_t> behind_a_hook(const std::vector<uint8_t>& copy, uintptr_t text, const mem::Range& image,
+                                  const mem::Pattern& p, uintptr_t* to) {
+  std::vector<size_t> out;
+  if (p.bytes.size() < kHookJump + 16) return out;  // what is left must still say which routine it is
+  mem::Pattern rest;
+  rest.bytes.assign(p.bytes.begin() + kHookJump, p.bytes.end());
+  for (const size_t h : mem::find_all(copy.data(), copy.size(), rest, 8)) {
+    if (h < kHookJump || copy[h - kHookJump] != 0xE9) continue;
+    const size_t entry = h - kHookJump;
+    int32_t rel = 0;
+    std::memcpy(&rel, &copy[entry + 1], sizeof(rel));
+    const uintptr_t target = text + entry + kHookJump + static_cast<intptr_t>(rel);
+    if (image.contains(target)) continue;  // a jump inside the image is the game's own code, not a hook
+    if (out.empty()) *to = target;
+    out.push_back(entry);
+  }
+  return out;
+}
+
+// Where a hook's jump leads, for the log: the loader's jump to a relay page beside the routine (`jmp [rip+0]` and an
+// address), the relay's to the hook's code, in the module that made it ("pyre-lootfilter.dll+0x1A2B").
+void describe_hook(uintptr_t to, char* out, size_t size) {
+  uint8_t relay[14] = {};
+  uintptr_t code = to;
+  if (mem::copy_from(relay, to, sizeof(relay)) && relay[0] == 0xFF && relay[1] == 0x25 && relay[2] == 0 &&
+      relay[3] == 0 && relay[4] == 0 && relay[5] == 0) {
+    uint64_t abs = 0;
+    std::memcpy(&abs, relay + 6, sizeof(abs));
+    if (abs) code = static_cast<uintptr_t>(abs);
+  }
+  HMODULE m = nullptr;
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(code), &m) &&
+      m) {
+    wchar_t path[MAX_PATH] = {};
+    const DWORD n = GetModuleFileNameW(m, path, MAX_PATH);
+    const wchar_t* name = path;
+    for (DWORD k = 0; k < n; ++k)
+      if (path[k] == L'\\' || path[k] == L'/') name = path + k + 1;
+    char utf8[MAX_PATH] = "?";
+    WideCharToMultiByte(CP_UTF8, 0, name, -1, utf8, sizeof(utf8), nullptr, nullptr);
+    std::snprintf(out, size, "%s+0x%llX", utf8, static_cast<unsigned long long>(code - reinterpret_cast<uintptr_t>(m)));
+  } else {
+    std::snprintf(out, size, "0x%llX", static_cast<unsigned long long>(code));
+  }
+}
 
 }  // namespace
 
 const Spec& spec(Id id) { return kSpecs[id]; }
 const Result& result(Id id) { return g_results[id]; }
+const char* taken_by(Id id) { return found(id) && g_results[id].taken_to ? g_taken_by[id] : nullptr; }
+int taken_count() {
+  int n = 0;
+  for (int i = 0; i < kCount; ++i) n += taken_by(static_cast<Id>(i)) ? 1 : 0;
+  return n;
+}
 uintptr_t exe_base() { return g_base; }
 uintptr_t address(Id id) { return found(id) && g_base ? g_base + static_cast<uintptr_t>(g_results[id].rva) : 0; }
 uintptr_t derived(Derived d) { return d >= 0 && d < dCount ? g_derived[d] : 0; }
@@ -768,6 +850,7 @@ bool enemy_test_checked() { return g_enemy_checked; }
 const ReviveFacts& revive_facts() { return g_revive; }
 const MapFacts& map_facts() { return g_map; }
 const FillFacts& fill_facts() { return g_fill; }
+const SpriteFacts& sprite_facts() { return g_sprite; }
 const RequirementFacts& requirement_facts() { return g_requirement; }
 bool kill_experience_checked() { return g_kill_exp_checked; }
 bool resist_adjust_checked() { return g_resist_checked; }
@@ -779,10 +862,18 @@ uintptr_t call_target(Id id) { return call_at(address(id)); }
 
 size_t entry_bytes(Id id, uint8_t* out, size_t capacity) {
   const uintptr_t at = address(id);
-  if (!at) return 0;
-  const mem::Pattern p = mem::parse_pattern(kSpecs[id].pattern);
-  const size_t n = p.bytes.size() + static_cast<size_t>(kSpecs[id].offset);
+  if (!at || g_results[id].taken_to) return 0;
+  const Spec& s = kSpecs[id];
+  const mem::Pattern p = mem::parse_pattern(s.pattern);
+  const size_t n = p.bytes.size() + static_cast<size_t>(s.offset);
   if (n > capacity || !mem::copy_from(out, at, n)) return 0;
+  // Still the signature's: the pattern's byte k lies at `at + offset + k`. A hook another plugin put over the entry
+  // since the image was read is not hooked over.
+  for (size_t k = 0; k < p.bytes.size(); ++k) {
+    const intptr_t i = static_cast<intptr_t>(s.offset) + static_cast<intptr_t>(k);
+    if (p.bytes[k] < 0 || i < 0 || static_cast<size_t>(i) >= n) continue;
+    if (out[i] != static_cast<uint8_t>(p.bytes[k])) return 0;
+  }
   return n;
 }
 
@@ -813,12 +904,25 @@ int resolve(uintptr_t exe_base) {
   const size_t got = mem::snapshot(text.begin, text.size(), copy);
   logf("sites: .text at rva 0x%llX, %zu bytes (%zu readable)", static_cast<unsigned long long>(text.begin - exe_base),
        text.size(), got);
+  const mem::Range image = mem::module_range(exe_base);
   int usable = 0;
   for (int i = 0; i < kCount; ++i) {
     const Spec& s = kSpecs[i];
     const mem::Pattern p = mem::parse_pattern(s.pattern);
-    const std::vector<size_t> hits = mem::find_all(copy.data(), copy.size(), p, 8);
+    std::vector<size_t> hits = mem::find_all(copy.data(), copy.size(), p, 8);
     Result& r = g_results[i];
+    r = Result{};
+    g_taken_by[i][0] = 0;
+    // Not there as it is: a routine whose entry another plugin's hook has taken (only a signature that starts at the
+    // entry can be looked for so).
+    if (hits.empty() && s.offset == 0) {
+      uintptr_t to = 0;
+      hits = behind_a_hook(copy, text.begin, image, p, &to);
+      if (hits.size() == 1) {
+        r.taken_to = to;
+        describe_hook(to, g_taken_by[i], sizeof(g_taken_by[i]));
+      }
+    }
     r.hits = static_cast<int>(hits.size());
     r.rva = hits.empty() ? 0 : static_cast<uint64_t>(text.begin - exe_base + hits[0]) - static_cast<uint64_t>(s.offset);
     for (size_t h = 0; h < hits.size() && h < 4; ++h)
@@ -849,6 +953,10 @@ int resolve(uintptr_t exe_base) {
       logf("sites: %-48s  0x%llX  hits=%d  research 0x%llX  moved %+lld%s", s.name,
            static_cast<unsigned long long>(r.rva), r.hits, static_cast<unsigned long long>(s.seed_rva),
            static_cast<long long>(r.rva) - static_cast<long long>(s.seed_rva), extra);
+      if (r.hits == 1 && r.taken_to)
+        logf("sites: %-48s  its entry is another plugin's hook (a jump to %s): read and called through it, never "
+             "hooked here",
+             s.name, g_taken_by[i]);
     }
   }
   return usable;
@@ -1964,10 +2072,29 @@ void derive() {
     const int bit = test_at ? byte_at(test_at + 5) : 0;
     const bool same_state = mark_at && byte_at(mark_at + 2) == state_at && byte_at(mark_at + 18) == state_at &&
                             byte_at(mark_at + 10) == bit && byte_at(mark_at + 7) == (0xFF & ~bit);
+    // The pass's other branch, for a room whose filled bit is set already (one the server let go and that was built
+    // again: the new room takes the bit from its DRLG room): when its monsters' bit is clear, the monster step alone (the
+    // saved units made again), then that bit set, which the first branch sets too after its own steps.
+    const uintptr_t refill = fill_steps && find_in(fill_steps + 69, 0x30,
+                                                   "EB ?? 48 8B CB E8 ?? ?? ?? ?? 85 C0 75 ?? 48 8B D3 48 8B CF E8 ?? ?? ?? "
+                                                   "?? BA 01 00 00 00 48 8B CB E8") == fill_steps + 69
+                                 ? fill_steps + 69
+                                 : 0;
+    const uintptr_t monsters_test = refill ? call_at(refill + 5) : 0;
+    const uintptr_t mark_monsters = refill ? call_at(refill + 33) : 0;
+    const bool same_populate = refill && call_at(refill + 20) == call_at(fill_steps + 29);
+    const uintptr_t mtest_at = monsters_test ? find_in(monsters_test, 8, "8B 41 ?? 83 E0 ?? C3") : 0;
+    const uintptr_t mmark_at = mark_monsters ? find_in(mark_monsters, 0x20, "44 8B 41 ?? 41 8B C0 83 E0 ?? 41 83 C8 ??") : 0;
+    const int mbit = mtest_at ? byte_at(mtest_at + 5) : 0;
+    const bool monsters = same_populate && mtest_at == monsters_test && mmark_at == mark_monsters &&
+                          byte_at(mtest_at + 2) == state_at && byte_at(mmark_at + 3) == state_at &&
+                          byte_at(mmark_at + 13) == mbit && byte_at(mmark_at + 9) == (0xFF & ~mbit) && mbit > 0 &&
+                          mbit != bit;
     if (fill_steps && head && find_in(head, 8, "48 8B 41 18 C3") == head && same_state && state_at > 0 && bit > 0 &&
         walk) {
       g_fill.room_state_at = state_at;
       g_fill.filled_bit = static_cast<uint32_t>(bit);
+      g_fill.monsters_bit = monsters ? static_cast<uint32_t>(mbit) : 0;
       g_fill.room_units_at = units_at;
       g_fill.unit_next_at = next_off;
       g_fill.known = true;
@@ -2013,6 +2140,128 @@ void derive() {
                "the map",
                !to_map_at ? "the transform" : !marker_at ? "the marker" : !rect ? "the view's rectangle"
                : !name_draw ? "the name draw" : "an NPC's name");
+    // Its first call, the marker decision, with the unit in rcx and rbp and the view in rdi (the signature holds the
+    // `mov rdi, rdx`, `mov rbp, rcx` and the call at +0x1A): the decision's only caller, where the map's hook goes, so
+    // that the unit draw stays free for the plugins that hook it.
+    const uintptr_t decision = address(kAutomapMarkerDecision);
+    if (draw && decision && call_at(draw + 0x1A) == decision) {
+      g_map.decision = true;
+      g_map.decision_return = draw + 0x1F;
+    } else if (draw) {
+      log_warn("sites: the automap's draw of one unit does not ask the marker decision found (%s) - nothing of the "
+               "plugin's is drawn on the map",
+               decision ? "another call" : "the decision not found");
+    }
+  }
+  // Icons on the map. The marker draw: a cross's frame width and height from two globals (`mov eax, [rip+x]`, each
+  // halved, times the scale, taken off the point), the options block at rsp+0x40 (`lea r8, [rsp+40h]`): the tint copied
+  // from a constant (`movaps`) to +0, the opacity to +0x10, the marker to +0x18; the crosses' sprite object (`lea rcx`);
+  // then the sprite draw, its scale in xmm3. The list draw, for each cell: its key less the cell's left (`add edi, imm8`
+  // with a negative) and the tileset's dy plus its down (`sub edx, [rbp-64h]`, `add r15d, imm8`), times the view's
+  // scale (+0x30 / +0x34), less its centre (+0x10 / +0x14) times the same, plus its origin (+0x28 / +0x2C); the tile's
+  // sprite: the cell divided by a chunk's tiles, the chunk's sprite object in the tileset's chunks ({objects, u64
+  // count}), the rest of the division the frame; the same options block (rbp-0x30: the tint from the same constant, the
+  // opacity at +0x10, the frame at +0x18) and the same sprite draw with the view's +0x38. The tilesets' table and the
+  // tileset's offsets are image-relative (the image base from `lea r, [rip - x]`). The crosses' set-up: the sprite
+  // loader with "AUTOMAP/Units" and the crosses' object, then the frame count getter (an HD sprite's count at +0xCC).
+  g_sprite = SpriteFacts{};
+  {
+    SpriteFacts& f = g_sprite;
+    const uintptr_t marker = g_map.draw_marker;
+    const uintptr_t m_count = marker ? find_in(marker, 0x40, "89 54 24 20 83 FA ?? 76") : 0;
+    const uintptr_t m_w = marker ? find_in(marker, 0x80, "8B 05 ?? ?? ?? ?? 4C 8D 44 24 40 99 C7 44 24 54 00 00 00 00") : 0;
+    const uintptr_t m_h = marker ? find_in(marker, 0xA0, "8B 05 ?? ?? ?? ?? 99 C7 45 9C 00 00 00 00") : 0;
+    const uintptr_t m_tint =
+        marker ? find_in(marker, 0x140, "0F 28 05 ?? ?? ?? ?? 2B C1 0F 29 44 24 40 89 44 24 30 48 8D 0D ?? ?? ?? ??") : 0;
+    const uintptr_t m_opacity = marker ? find_in(marker, 0x140, "F3 0F 10 0D ?? ?? ?? ?? 2B C2 F3 0F 11 4C 24 50") : 0;
+    const uintptr_t m_frame = marker ? find_in(marker, 0x160, "8B 44 24 20 89 44 24 58") : 0;
+    const uintptr_t m_draw = marker ? find_in(marker, 0x160, "0F 29 4D D0 E8 ?? ?? ?? ?? 48 8B 4D F0 48 33 CC") : 0;
+    const uintptr_t list = address(kAutomapListDraw);
+    const uintptr_t l_place = list ? find_in(list, 0x240,
+                                             "8B 7C 24 38 48 C1 EA 20 83 C7 ?? 2B 55 9C 66 0F 6E 46 10 F3 0F 10 76 30 F3 "
+                                             "0F 10 7E 34 0F 5B C0 89 54 24 3C 4C 8B 7C 24 38 49 C1 EF 20 41 83 C7 ??")
+                                   : 0;
+    const uintptr_t l_centre = list ? find_in(list, 0x260, "66 0F 6E 46 14 0F 5B C0 F3 0F 59 C7") : 0;
+    const uintptr_t l_origin = list ? find_in(list, 0x2C0,
+                                              "48 C7 45 E0 00 00 80 3F 41 8B 57 28 03 D7 0F BF 7B 22 41 2B D6 4C 8D 35 ?? "
+                                              "?? ?? ?? 89 55 C0 0F 28 05 ?? ?? ?? ?? 45 03 47 2C 44 2B C6 0F 29 45 D0")
+                                    : 0;
+    const uintptr_t l_total = list ? find_in(list, 0x320, "85 FF 78 0A 42 3B BC 36 ?? ?? ?? ?? 7C") : 0;
+    const uintptr_t l_chunk = list ? find_in(list, 0x340,
+                                             "8B C7 49 8D BE ?? ?? ?? ?? 99 48 03 FE 42 F7 BC 36 ?? ?? ?? ?? 48 98 89 55 "
+                                             "E8 48 89 44 24 40 48 3B 47 08")
+                                   : 0;
+    const uintptr_t l_sprite = list ? find_in(list, 0x3A0, "49 C1 E6 04 4C 03 37") : 0;
+    const uintptr_t l_draw =
+        list ? find_in(list, 0x480, "F3 41 0F 10 5F 38 4C 8D 45 D0 48 8D 54 24 38 F3 0F 11 45 E0 49 8B CE E8") : 0;
+    const uintptr_t init = address(kAutomapMarkerInit);
+    const uintptr_t i_load = init ? find_in(init, 0x180,
+                                            "45 33 C0 48 8D 15 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8D 0D ?? "
+                                            "?? ?? ?? E8 ?? ?? ?? ?? 83 F8 ??")
+                                  : 0;
+    const uintptr_t counter = i_load ? call_at(i_load + 29) : 0;
+    const uintptr_t c_read = counter ? find_in(counter, 0x30, "48 8B 03 48 85 C0 74 ?? 8B 80 ?? ?? ?? ?? 48 83 C4 20 5B C3") : 0;
+    // The tint constant both blocks copy: no tint, {1, 1, 1, 0}; the opacity 1.0.
+    const uintptr_t white = m_tint ? rip_operand(m_tint, 3, 7) : 0;
+    float tint[4] = {0, 0, 0, 1}, opacity = 0.0f;
+    const bool no_tint = white && mem::copy_from(tint, white, sizeof(tint)) && tint[0] == 1.0f && tint[1] == 1.0f &&
+                         tint[2] == 1.0f && tint[3] == 0.0f;
+    const bool full = m_opacity && mem::read_safe(rip_operand(m_opacity, 4, 8), &opacity) && opacity == 1.0f;
+    const uintptr_t crosses = m_tint ? rip_operand(m_tint + 18, 3, 7) : 0;
+    const uintptr_t i_size = init ? find_in(init, 0x180, "45 33 C0 48 8D 54 24 60 48 8D 0D ?? ?? ?? ?? E8") : 0;
+    const uintptr_t sizer = i_size && rip_operand(i_size + 8, 3, 7) == crosses ? call_at(i_size + 15) : 0;
+    const uintptr_t s_read = sizer ? find_in(sizer, 0x50,
+                                             "48 8B 0B 48 85 C9 74 ?? 8B 81 ?? ?? ?? ?? 89 84 24 98 00 00 00 8B 81 ?? ?? "
+                                             "?? ?? EB")
+                                   : 0;
+    char name[16] = {};
+    const bool named = i_load && mem::copy_from(name, rip_operand(i_load + 3, 3, 7), sizeof(name) - 1) &&
+                       std::strcmp(name, "AUTOMAP/Units") == 0;
+    const bool same_crosses = i_load && crosses && rip_operand(i_load + 10, 3, 7) == crosses &&
+                              rip_operand(i_load + 22, 3, 7) == crosses;
+    const uintptr_t draw_m = m_draw ? call_at(m_draw + 4) : 0;
+    const uintptr_t draw_l = l_draw ? call_at(l_draw + 23) : 0;
+    // The tileset's offsets: the image base (`lea rdi, [rip - x]`) and a table by the tileset (8 bytes each: dx, dy).
+    const bool base_lea = list && rip_operand(list + 0x33, 3, 7) == g_base && l_origin &&
+                          rip_operand(l_origin + 21, 3, 7) == g_base;
+    int32_t offsets_rva = 0, dy = 0;
+    const bool offsets = base_lea && mem::read_safe(list + 0x51, &offsets_rva) && offsets_rva > 0 &&
+                         mem::read_safe(g_base + static_cast<uintptr_t>(offsets_rva) + 4, &dy);
+    int32_t chunks = 0, per_chunk = 0, total = 0, frames_at = 0, width_at = 0, height_at = 0;
+    const bool tiles = l_chunk && l_total && l_sprite && mem::read_safe(l_chunk + 5, &chunks) &&
+                       mem::read_safe(l_chunk + 17, &per_chunk) && mem::read_safe(l_total + 8, &total) && chunks > 0 &&
+                       per_chunk > 0 && total > 0;
+    const int left = l_place ? -static_cast<int8_t>(byte_at(l_place + 10)) : 0;
+    const int down = l_place ? static_cast<int8_t>(byte_at(l_place + 48)) : 0;
+    const bool counted = c_read && mem::read_safe(c_read + 10, &frames_at) && frames_at > 0 && frames_at < 0x400 &&
+                         s_read && mem::read_safe(s_read + 10, &width_at) && mem::read_safe(s_read + 23, &height_at) &&
+                         width_at > 0 && width_at < 0x400 && height_at > 0 && height_at < 0x400;
+    if (m_count && m_w && m_h && m_frame && no_tint && full && named && same_crosses && draw_m && draw_m == draw_l &&
+        white == rip_operand(l_origin + 31, 3, 7) && offsets && tiles && l_centre && left > 0 && down > 0 && counted) {
+      f.draw = draw_m;
+      f.load = call_at(i_load + 17);
+      f.crosses = crosses;
+      f.cross_size = rip_operand(m_w, 2, 6);
+      f.crosses_count = byte_at(m_count + 6) + 1;
+      f.hd_frames_at = frames_at;
+      f.hd_width_at = width_at;
+      f.hd_height_at = height_at;
+      f.tile_chunks = g_base + static_cast<uintptr_t>(chunks);
+      f.tile_per_chunk = g_base + static_cast<uintptr_t>(per_chunk);
+      f.tile_total = g_base + static_cast<uintptr_t>(total);
+      f.tile_dy = dy;
+      f.cell_left = left;
+      f.cell_down = down;
+      f.known = f.load && f.cross_size && rip_operand(m_h, 2, 6) == f.cross_size + 4 &&
+                f.crosses_count == byte_at(i_load + 36);
+    }
+    if ((marker || list || init) && !f.known)
+      log_warn("sites: the automap's sprites are not drawn the way expected (%s) - no chest, unique, set or rune icon "
+               "on the map",
+               !marker || !draw_m ? "the marker draw" : !list || !draw_l ? "the list draw"
+               : draw_m != draw_l ? "two sprite draws" : !no_tint || !full ? "the draw's options"
+               : !init || !named || !same_crosses ? "the crosses' set-up" : !offsets || !tiles ? "the tilesets"
+                                                                                               : "a cell's place");
   }
   // Ignore item requirements. The requirement test asks level, strength and dexterity first, then, in three places of its
   // tail read here, each refusal a jump to the one `xor eax, eax` its first test's refusal takes: the identified flag
@@ -2521,15 +2770,23 @@ void derive() {
        g_map.arcane_level, g_map.presets ? "" : "(not checked) ", g_map.draw ? "" : "(not derived) ",
        rva_of(g_map.to_map), rva_of(g_map.draw_marker), rva_of(g_map.draw_name), g_map.name_color,
        rva_of(g_map.unit_name));
-  logf("sites: %-28s %sthe fill pass fills each room of an act's list whose state +0x%X lacks 0x%X; a room's units "
-       "from +0x%X, the next +0x%X",
+  logf("sites: %-28s %sthe fill pass fills each room of an act's list whose state +0x%X lacks 0x%X, and makes again "
+       "the saved units of one that lacks 0x%X; a room's units from +0x%X, the next +0x%X",
        "rooms filled ahead", g_fill.known ? "" : "(not checked) ", g_fill.room_state_at, g_fill.filled_bit,
-       g_fill.room_units_at, g_fill.unit_next_at);
+       g_fill.monsters_bit, g_fill.room_units_at, g_fill.unit_next_at);
   logf("sites: %-28s %sa built room's own preset units at +0x%X; %sits near rooms at +0x%X, its warp links at +0x%X "
        "(a warp's id at +0x%X, its tile's preset unit of type %d), an ActiveRoom's collision map at +0x%X",
        "map: area names at exits", g_map.room_presets ? "" : "(not checked) ", g_map.room_presets_at,
        g_map.exits ? "" : "(not checked) ", g_map.near_at, g_map.links_at, g_map.warp_id_at, g_map.warp_preset_type,
        g_map.collision_at);
+  const SpriteFacts& sp = g_sprite;
+  logf("sites: %-28s %sthe sprite draw 0x%llX, the loader 0x%llX; the crosses' sprite 0x%llX (%d frames, their size at "
+       "0x%llX), an HD sprite's frames at +0x%X, a frame's width +0x%X and height +0x%X; tileset 0's chunks 0x%llX "
+       "(tiles a chunk 0x%llX, in all 0x%llX), its dy %d; a cell's key less %d, plus %d",
+       "map: chests and items", sp.known ? "" : "(not derived) ", rva_of(sp.draw), rva_of(sp.load),
+       rva_of(sp.crosses), sp.crosses_count, rva_of(sp.cross_size), sp.hd_frames_at, sp.hd_width_at, sp.hd_height_at,
+       rva_of(sp.tile_chunks), rva_of(sp.tile_per_chunk), rva_of(sp.tile_total), sp.tile_dy, sp.cell_left,
+       sp.cell_down);
   const RequirementFacts& r = g_requirement;
   logf("sites: %-28s %spast level, strength and dexterity: item flag 0x%X, a tome (type %d) its stat %d, the restricted "
        "sockets 0x%llX, an ItemTypes row's class +0x%X (none from %d); the data tables 0x%llX: Items +0x%X (%d bytes a "

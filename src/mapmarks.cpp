@@ -7,11 +7,14 @@
 #include <cstring>
 #include <initializer_list>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "cheats.h"
 #include "game.h"
 #include "log.h"
+#include "maploot.h"
 #include "mem.h"
 #include "perf.h"
 #include "sites.h"
@@ -44,7 +47,8 @@ constexpr int kDrawnLogs = 4;
 constexpr int kDeadLogs = 4;
 constexpr int kAheadLogs = 4;      // areas whose named enemies read from the server are logged
 constexpr int kNameOffLogs = 4;    // names worked out that the client's own differ from
-constexpr size_t kMaxDeadIds = 4096;  // monsters seen dead in this game (a list read before they died adds none)
+constexpr size_t kMaxDeadIds = 65536;  // monsters seen dead in this game (a list read before they died adds none)
+constexpr size_t kMaxPlain = 32768;    // enemies that are not named on the map in this game ("All enemies")
 constexpr uintptr_t kUnitData = 0x10;  // a unit's data (game.cpp's): a monster's name seed, kind, mods, super unique row
 
 // The rows of the loader's tables (the game's own memory): MonStats (its name's string id, flags and Rarity),
@@ -104,6 +108,8 @@ struct Tables {
   int icon_kinds;     // object classes with an icon
   uint32_t mon_flags[kMaxMonsters];
   uint8_t mon_rarity[kMaxMonsters];
+  uint8_t mon_align[kMaxMonsters];  // Align: 0 the monsters' side
+  bool mon_attackable[kMaxMonsters];  // its MonStats2 row's isAtt (true when MonStats2 could not be read)
   uint16_t mon_name[kMaxMonsters];  // its name's string id (NameStr)
   int16_t object_cell[kMaxObjects];
   uint8_t level_act[kMaxLevels];
@@ -138,10 +144,24 @@ struct ServerMark {
   bool champion;
   char name[kNameLen];
 };
+// An enemy that is not named ("All enemies"): a smaller cross, no name, where the server read it or the automap last
+// drew it.
+struct PlainMark {
+  uint32_t unit;
+  int32_t px, py;
+};
+struct Plain {
+  int level;
+  int layer;
+  int32_t px, py;
+  ULONGLONG seen;  // the automap draw it was last drawn in itself
+};
 struct Pending {
   uint8_t bank;
   int level;
   std::vector<ServerMark> marks;
+  std::vector<PlainMark> plain;
+  std::vector<RoomBox> rooms;  // the rooms read: a mark elsewhere is not the read's to take away
 };
 struct Label {  // a name written in this draw
   int32_t x, y;
@@ -189,7 +209,9 @@ Exit g_exits[kMaxExits];  // under g_cs
 int g_exit_count = 0;
 std::vector<Found> g_found;  // under g_cs
 std::vector<Pending> g_pending;   // under g_cs: an area's named enemies read from the server, for the next draw
-std::vector<uint32_t> g_dead_ids;  // under g_cs: the monsters seen dead in this game
+std::unordered_set<uint32_t> g_dead_ids;  // under g_cs: the monsters seen dead in this game
+std::unordered_map<uint32_t, Plain> g_plain;  // under g_cs: the enemies that are not named, by id
+volatile LONG g_plain_full_warned = 0;
 volatile LONG g_pending_waiting = 0, g_ahead_stat = 0, g_names_off_stat = 0, g_ahead_logged = 0, g_names_off_logged = 0;
 volatile LONG g_found_waiting = 0, g_rolled_stat = 0, g_found_full_warned = 0;
 uint64_t g_found_tried = 0;  // the UI thread's
@@ -325,6 +347,8 @@ bool read_bank(int b, Tables* t) {
   const auto bank = static_cast<Bank>(b);
   int monsters = 0, supers = 0, objects = 0, levels = 0;
   const std::vector<uint8_t> mon = rows_of(bank, TableId::MonStats, kMonStatsRow, kMaxMonsters, &monsters);
+  int monsters2 = 0;
+  const std::vector<uint8_t> mon2 = rows_of(bank, TableId::MonStats2, kMonStats2Row, 65535, &monsters2);
   const std::vector<uint8_t> sup = rows_of(bank, TableId::SuperUniques, kSuperRow, kMaxSupers, &supers);
   const std::vector<uint8_t> obj = rows_of(bank, TableId::Objects, kObjectsRow, kMaxObjects, &objects);
   const std::vector<uint8_t> lev = rows_of(bank, TableId::Levels, kLevelsRow, kMaxLevels, &levels);
@@ -339,6 +363,9 @@ bool read_bank(int b, Tables* t) {
   for (int i = 0; i < monsters; ++i) {
     t->mon_flags[i] = field<uint32_t>(mon, kMonStatsRow, i, kMonFlags);
     t->mon_rarity[i] = field<uint8_t>(mon, kMonStatsRow, i, kMonRarity);
+    t->mon_align[i] = field<uint8_t>(mon, kMonStatsRow, i, kMonAlign);
+    const int ex = field<uint16_t>(mon, kMonStatsRow, i, kMonStatsEx);
+    t->mon_attackable[i] = !monsters2 || ex >= monsters2 || (field<uint8_t>(mon2, kMonStats2Row, ex, kMon2Flags) & kMon2IsAtt);
     t->mon_name[i] = field<uint16_t>(mon, kMonStatsRow, i, kMonName);
     if (boss_row(t->mon_flags[i], t->mon_rarity[i]) && t->bosses < kMaxBosses) {
       BossName& n = t->boss[t->bosses++];
@@ -792,9 +819,7 @@ void forget_dead(uint32_t unit, int level, const char* name) {
   bool let_go = false;
   EnterCriticalSection(&g_cs);
   // A read of its area made before it died does not bring it back.
-  if (unit && g_dead_ids.size() < kMaxDeadIds &&
-      std::find(g_dead_ids.begin(), g_dead_ids.end(), unit) == g_dead_ids.end())
-    g_dead_ids.push_back(unit);
+  if (unit && g_dead_ids.size() < kMaxDeadIds) g_dead_ids.insert(unit);
   for (int i = 0; i < g_mark_count; ++i) {
     const Mark& m = g_marks[i];
     const bool spot = !m.unit && name[0] && m.level == level && std::strcmp(m.name, name) == 0;
@@ -892,6 +917,45 @@ bool label_here(uint64_t point, const char* name, float scale) {
   return true;
 }
 
+// An enemy's marker: the plugin's red dot (a named enemy's ringed in orange), or in legacy graphics, and while the dots
+// are not loaded, the automap's red cross.
+void enemy_marker(const void* view, uint64_t point, float scale, bool is_named) {
+  if (maploot::enemy_dot(view, point, is_named)) return;
+  game::map_marker(point, kMarkerEnemy, scale);
+}
+
+// An enemy that is not named, drawn by the automap ("All enemies"): its dot, kept where it was last drawn; seen dead, it
+// goes for good.
+void plain_drawn(Unit* u, const void* view) {
+  const uint32_t id = game::unit_id(u);
+  if (game::unit_is_dead(u)) {
+    EnterCriticalSection(&g_cs);
+    g_plain.erase(id);
+    if (g_dead_ids.size() < kMaxDeadIds) g_dead_ids.insert(id);
+    LeaveCriticalSection(&g_cs);
+    return;
+  }
+  // No enemy stands in a town; the client's hostility test does the rest (a monster made yours: a revive, a converted
+  // one).
+  const int level = game::unit_level_id(u);
+  if (level <= 0 || game::town_level(level)) return;
+  Unit* me = game::local_client_player();
+  int32_t px = 0, py = 0;
+  if (!me || !game::is_hostile(me, u) || !game::unit_pixels(u, &px, &py)) return;
+  const int layer = game::automap_layer();
+  EnterCriticalSection(&g_cs);
+  auto it = g_plain.find(id);
+  if (it == g_plain.end() && g_plain.size() < kMaxPlain) it = g_plain.emplace(id, Plain{}).first;
+  const bool kept = it != g_plain.end();
+  if (kept) it->second = Plain{level, layer, px, py, g_draw};
+  LeaveCriticalSection(&g_cs);
+  if (!kept && log_once(&g_plain_full_warned, LogLevel::kWarning))
+    log_warn("enemies: %zu enemies on the map in this game - no more are kept", kMaxPlain);
+  uint64_t point = 0;
+  if (!game::map_point(view, px, py, &point)) return;
+  enemy_marker(view, point, game::map_scale(view), false);
+}
+
 void monster_drawn(Unit* u, const void* view) {
   const Tables* t = tables_of(game::unit_table_bank(u));
   if (!t) return;
@@ -899,7 +963,19 @@ void monster_drawn(Unit* u, const void* view) {
   const bool row = cls < static_cast<uint32_t>(t->monsters);
   if (row && (t->mon_flags[cls] & kMonNpc)) return;
   const uint16_t kind = game::monster_type_flags(u);
-  if (!named(kind, row && boss_row(t->mon_flags[cls], t->mon_rarity[cls]))) return;
+  const EnemyMark what = enemy_mark(named(kind, row && boss_row(t->mon_flags[cls], t->mon_rarity[cls])),
+                                    static_cast<EnemyTier>(cheats::enemy_tier()));
+  if (what == EnemyMark::kNone) return;
+  if (what == EnemyMark::kPlain) {
+    // What the server's reads mark (server_enemy: the monsters' side by its row, not an NPC, one that can be attacked),
+    // asked of the client's monsters too: the client's hostility test calls a critter an enemy (a neutral is on no
+    // one's side), and in a town every monster (2026-11-03: "there are npcs in the towns that are showing up on the
+    // enemies map": the chickens and cows of Act 1, the bugs and scorpions of Act 2, the barbarians around Malah, your own
+    // mercenary).
+    if (!row || !server_enemy(t->mon_flags[cls], t->mon_align[cls], t->mon_attackable[cls])) return;
+    plain_drawn(u, view);
+    return;
+  }
   char name[kNameLen] = {};
   if (const char* raw = game::client_unit_name(u)) {
     std::snprintf(name, sizeof(name), "%s", raw);
@@ -920,17 +996,18 @@ void monster_drawn(Unit* u, const void* view) {
   uint64_t point = 0;
   if (!game::map_point(view, px, py, &point)) return;
   const float scale = game::map_scale(view);
-  game::map_marker(point, kMarkerEnemy, scale);
-  if (label_here(point, name, scale))
+  enemy_marker(view, point, scale, true);
+  if (cheats::enemy_names() && label_here(point, name, scale))
     game::map_name(name, point, scale, is_champion ? kChampionColor : game::map_name_color());
   counted(u, cls, kind, name);
 }
 
-// The named enemies read from the server's side (under g_cs, the draw thread, which can ask a level's layer): each
-// takes its mark (by its id, else a layout's spot of its name in its level, else a new one) where it stands, but for
-// one the automap draws itself now, whose place is the client's; the level's marks of the server's monsters not in the
-// newer read go (they died, or left the area), but for one the automap draws now. A level whose layer is not known yet
-// waits for the next draw.
+// The enemies read from the server's side (under g_cs, the draw thread, which can ask a level's layer): each takes its
+// mark (by its id, else a layout's spot of its name in its level, else a new one) where it stands, but for one the
+// automap draws itself now, whose place is the client's; the level's marks of the server's monsters not in the newer
+// read go (they died, or left the area), but for one the automap draws now and for one outside the rooms the read went
+// over (its room let go by the server, which keeps its units saved: mapmarks.h RoomBox). A level whose layer is not
+// known yet waits for the next draw.
 void take_pending() {
   for (size_t k = 0; k < g_pending.size();) {
     const Pending& p = g_pending[k];
@@ -939,10 +1016,14 @@ void take_pending() {
       ++k;
       continue;
     }
-    unsigned added = 0, gone = 0, full = 0;
+    unsigned added = 0, gone = 0, full = 0, kept = 0;
     for (int i = 0; i < g_mark_count; ++i) {
       const Mark& m = g_marks[i];
       if (!m.server || m.level != p.level || g_draw - m.seen <= 2) continue;
+      if (!in_rooms(p.rooms, m.px, m.py)) {
+        ++kept;
+        continue;
+      }
       bool still = false;
       for (size_t j = 0; j < p.marks.size() && !still; ++j) still = p.marks[j].unit == m.unit;
       if (still) continue;
@@ -950,7 +1031,7 @@ void take_pending() {
       ++gone;
     }
     for (const ServerMark& s : p.marks) {
-      if (std::find(g_dead_ids.begin(), g_dead_ids.end(), s.unit) != g_dead_ids.end()) continue;
+      if (g_dead_ids.count(s.unit)) continue;
       Mark* mark = nullptr;
       for (int i = 0; i < g_mark_count && !mark; ++i)
         if (g_marks[i].unit == s.unit) mark = &g_marks[i];
@@ -977,12 +1058,41 @@ void take_pending() {
       }
       if (!mark->client_named) std::snprintf(mark->name, sizeof(mark->name), "%s", s.name);
     }
+    // The enemies that are not named: the level's marks in the rooms read go (but for one the automap draws now), the
+    // read's take their place.
+    unsigned plain_kept = 0;
+    for (auto it = g_plain.begin(); it != g_plain.end();) {
+      const Plain& m = it->second;
+      bool keep = m.level != p.level || g_draw - m.seen <= 2;
+      if (!keep && !in_rooms(p.rooms, m.px, m.py)) {
+        keep = true;
+        ++plain_kept;
+      }
+      it = keep ? std::next(it) : g_plain.erase(it);
+    }
+    for (const PlainMark& s : p.plain) {
+      if (g_dead_ids.count(s.unit)) continue;
+      auto it = g_plain.find(s.unit);
+      if (it == g_plain.end()) {
+        if (g_plain.size() >= kMaxPlain) {
+          ++full;
+          continue;
+        }
+        it = g_plain.emplace(s.unit, Plain{p.level, layer, s.px, s.py, 0}).first;
+      } else if (g_draw - it->second.seen > 2) {
+        it->second.level = p.level;
+        it->second.layer = layer;
+        it->second.px = s.px;
+        it->second.py = s.py;
+      }
+    }
     InterlockedExchangeAdd(&g_ahead_stat, static_cast<LONG>(added));
     if (full && log_once(&g_full_warned, LogLevel::kWarning))
       log_warn("named enemies: %d marks on the map in this game - no more are kept", kMaxMarks);
     if (log_first(&g_ahead_logged, kAheadLogs))
-      logf("named enemies: level %d (layer %d): %zu named enemies of the server's on the map (%u new, %u gone)",
-           p.level, layer, p.marks.size(), added, gone);
+      logf("named enemies: level %d (layer %d): %zu named enemies and %zu other enemies of the server's on the map (%u "
+           "new, %u gone; %u kept where the server has let their rooms go), read from %zu of the area's rooms",
+           p.level, layer, p.marks.size(), p.plain.size(), added, gone, kept + plain_kept, p.rooms.size());
     g_pending.erase(g_pending.begin() + static_cast<ptrdiff_t>(k));
   }
   InterlockedExchange(&g_pending_waiting, g_pending.empty() ? 0 : 1);
@@ -998,6 +1108,8 @@ void marks_drawn(const void* view, bool enemies, int exits_of) {
   if (layer < 0) return;
   const float scale = game::map_scale(view);
   const int color = game::map_name_color();
+  const bool names = cheats::enemy_names();
+  const bool all = static_cast<EnemyTier>(cheats::enemy_tier()) == EnemyTier::kAll;
   EnterCriticalSection(&g_cs);
   if (enemies && g_pending_waiting) take_pending();
   for (int i = 0; enemies && i < g_mark_count; ++i) {
@@ -1005,8 +1117,16 @@ void marks_drawn(const void* view, bool enemies, int exits_of) {
     uint64_t point = 0;
     // Its monster drawn in this draw or the one before (the units come before the player, or after it).
     if (m.layer != layer || g_draw - m.seen <= 2 || !game::map_point(view, m.px, m.py, &point)) continue;
-    game::map_marker(point, kMarkerEnemy, scale);
-    if (label_here(point, m.name, scale)) game::map_name(m.name, point, scale, m.champion ? kChampionColor : color);
+    enemy_marker(view, point, scale, true);
+    if (names && label_here(point, m.name, scale))
+      game::map_name(m.name, point, scale, m.champion ? kChampionColor : color);
+  }
+  if (enemies && all) {
+    for (const auto& [id, m] : g_plain) {
+      uint64_t point = 0;
+      if (m.layer != layer || g_draw - m.seen <= 2 || !game::map_point(view, m.px, m.py, &point)) continue;
+      enemy_marker(view, point, scale, false);
+    }
   }
   for (int i = 0; exits_of > 0 && i < g_exit_count; ++i) {
     const Exit& e = g_exits[i];
@@ -1031,6 +1151,7 @@ void set_services(const D2RL::PluginContext* ctx, const D2RL::DataTableService* 
 }
 
 void set_draw_hooked(bool hooked) { InterlockedExchange(&g_draw_hooked, hooked ? 1 : 0); }
+bool draw_hooked() { return g_draw_hooked != 0; }
 
 void bind(bool ui_thread) {
   const sites::MapFacts& m = sites::map_facts();
@@ -1047,12 +1168,12 @@ void bind(bool ui_thread) {
   const char* enemies = pass                       ? pass
                         : !game::has_map_draw()    ? "the automap's unit draw not found as expected"
                         : !game::has_hostility()   ? "the client's hostility test not found"
-                        : !g_draw_hooked           ? "the automap's unit draw not hooked"
+                        : !g_draw_hooked           ? "the automap's marker decision not hooked"
                                                    : nullptr;
   const char* exits = pass                       ? pass
                       : !m.exits                 ? "the game's links between areas not found as expected"
                       : !game::has_map_draw()    ? "the automap's unit draw not found as expected"
-                      : !g_draw_hooked           ? "the automap's unit draw not hooked"
+                      : !g_draw_hooked           ? "the automap's marker decision not hooked"
                                                  : nullptr;
   cheats::set_why_not(cheats::kMapLandmarks, landmarks);
   cheats::set_why_not(cheats::kMapEnemies, enemies);
@@ -1225,12 +1346,14 @@ void put_found(uint64_t now_ms) {
        put, added, later.empty() ? "" : " - more wait for their own area's map");
 }
 
-int monsters_found(uint8_t bank, int level, Unit* const* monsters, size_t count) {
+int monsters_found(uint8_t bank, int level, Unit* const* monsters, size_t count, const std::vector<RoomBox>& rooms) {
   const Tables* t = tables_of(bank);
   if (!t || !g_cs_ready || level <= 0) return 0;
   Pending p;
   p.bank = bank;
   p.level = level;
+  p.rooms = rooms;
+  const auto tier = static_cast<EnemyTier>(cheats::enemy_tier());
   for (size_t i = 0; i < count; ++i) {
     Unit* u = monsters[i];
     // Not one of yours (a revived unique is a pet), nor a town's people.
@@ -1239,7 +1362,17 @@ int monsters_found(uint8_t bank, int level, Unit* const* monsters, size_t count)
     if (cls >= static_cast<uint32_t>(t->monsters) || (t->mon_flags[cls] & kMonNpc)) continue;
     const uint16_t kind = game::monster_type_flags(u);
     const bool boss = boss_row(t->mon_flags[cls], t->mon_rarity[cls]);
-    if (!named(kind, boss)) continue;
+    const EnemyMark what = enemy_mark(named(kind, boss), tier);
+    if (what == EnemyMark::kNone) continue;
+    if (what == EnemyMark::kPlain) {
+      // The client asks its hostility test; the server's copy is an enemy by its row's side (critters, the town folk
+      // and the cows are not), and one the game lets be attacked.
+      PlainMark m{};
+      m.unit = game::unit_id(u);
+      if (server_enemy(t->mon_flags[cls], t->mon_align[cls], t->mon_attackable[cls]) && game::unit_pixels(u, &m.px, &m.py))
+        p.plain.push_back(m);
+      continue;
+    }
     ServerMark m{};
     m.unit = game::unit_id(u);
     if (!game::unit_pixels(u, &m.px, &m.py)) continue;
@@ -1249,9 +1382,16 @@ int monsters_found(uint8_t bank, int level, Unit* const* monsters, size_t count)
   }
   const int named_count = static_cast<int>(p.marks.size());
   EnterCriticalSection(&g_cs);
+  // A newer read of the level takes the place of one still waiting, with what that one read in rooms this one did not.
   for (size_t k = 0; k < g_pending.size(); ++k)
     if (g_pending[k].level == level) {
-      g_pending.erase(g_pending.begin() + static_cast<ptrdiff_t>(k));  // a newer read of the level replaces it
+      const Pending& old = g_pending[k];
+      for (const ServerMark& m : old.marks)
+        if (!in_rooms(p.rooms, m.px, m.py)) p.marks.push_back(m);
+      for (const PlainMark& m : old.plain)
+        if (!in_rooms(p.rooms, m.px, m.py)) p.plain.push_back(m);
+      p.rooms.insert(p.rooms.end(), old.rooms.begin(), old.rooms.end());
+      g_pending.erase(g_pending.begin() + static_cast<ptrdiff_t>(k));
       break;
     }
   g_pending.push_back(std::move(p));
@@ -1271,6 +1411,7 @@ void game_left() {
     InterlockedExchange(&g_found_waiting, 0);
     g_pending.clear();
     g_dead_ids.clear();
+    g_plain.clear();
     InterlockedExchange(&g_pending_waiting, 0);
     LeaveCriticalSection(&g_cs);
   }
@@ -1296,6 +1437,7 @@ Stats stats() {
   if (g_cs_ready) {
     EnterCriticalSection(&g_cs);
     for (int i = 0; i < g_mark_count; ++i) s.kept += g_marks[i].unit ? 1u : 0u;
+    s.plain = static_cast<unsigned>(g_plain.size());
     s.exits = static_cast<unsigned>(g_exit_count);
     LeaveCriticalSection(&g_cs);
   }

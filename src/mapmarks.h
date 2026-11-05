@@ -87,6 +87,58 @@ constexpr bool named(uint16_t kind, bool is_boss_row) {
 // A champion: the client gives it the unique bit as well (its kind is 0xD), so it is asked first.
 constexpr bool champion(uint16_t kind) { return (kind & kKindChampion) != 0 && (kind & kKindSuperUnique) == 0; }
 
+// Which enemies the map shows (the picker of "Enemies on the map"): the named ones only, or every enemy, the others a
+// smaller red cross with no name (a name over every monster would bury the map).
+enum class EnemyTier : int { kNamed = 0, kAll = 1 };
+constexpr int kEnemyTiers = 2;
+constexpr const char* kEnemyTierNames[kEnemyTiers] = {"Named enemies only", "All enemies"};
+// What a hostile monster gets: nothing, an enemy's cross (no name), or a named enemy's cross (and its name when names are
+// shown).
+enum class EnemyMark : int { kNone = 0, kPlain = 1, kNamed = 2 };
+constexpr EnemyMark enemy_mark(bool is_named, EnemyTier tier) {
+  return is_named ? EnemyMark::kNamed : tier == EnemyTier::kAll ? EnemyMark::kPlain : EnemyMark::kNone;
+}
+// An enemy as the server has it (the client asks its own hostility test): a MonStats row with Align 0 (+0x87: the
+// monsters' side; 1 the town folk, critters and the rogues; 2 neutral, the cows and camels), not an NPC, and one that
+// can be attacked: its MonStats2 row (MonStats +0x4C MonStatsEx, rows of 0x128 bytes) has isAtt (+0x05 & 2), the
+// flag the client's monster init gives the unit (0x1A3940): the traps, spawners, hydras and effects have none.
+constexpr size_t kMonAlign = 0x87;
+constexpr size_t kMonStatsEx = 0x4C;
+constexpr uint32_t kMonStats2Row = 0x128;
+constexpr size_t kMon2Flags = 0x05;
+constexpr uint8_t kMon2IsAtt = 0x02;
+constexpr bool server_enemy(uint32_t flags, uint8_t align, bool attackable) {
+  return align == 0 && (flags & kMonNpc) == 0 && attackable;
+}
+
+// --- What a read of an area's built rooms says (the server unloads the rooms no player is near) --------------------
+//
+// Every 12 server frames (0x406550 -> 0x4088C0) the server counts, for each built room of each act, the passes in a row
+// no client has had it (0x2EFEB0: ActiveRoom +0x10, reset while +0x70 holds one); past 10 (some 5 s), when the room may
+// go (0x2F0630: no portal in it, flag 0x400000, and its DRLG room's activation level, +0x70, above 1: no player's room
+// and none it holds near), each unit in it is saved and freed (0x504260: a monster's record by 0x505090, its id, place,
+// life, kind and mods; an object's and an item's by 0x5045D0, an object's without its id) and the room let go (0x2F0110:
+// the DRLG room's +0x58 cleared, its fill state kept at +0xA0). A room built ahead stands at no player's level, so the
+// area's rooms built for a read are let go some seconds after it, and the game makes them again as a player comes near
+// (a rebuilt room is filled again for its units: 0x503790 makes its saved monsters with their ids (0x505D70) and its
+// saved objects and items, with new ids). So a read of an area's built rooms says nothing of the units of the others:
+// a mark is taken away by a read only when it stands in one of the rooms the read went over.
+struct RoomBox {  // a built room, in subtiles: [x0, x1) x [y0, y1) (its DRLG room's tiles, +0x60 .. +0x6C, times 5)
+  int32_t x0, y0, x1, y1;
+};
+// A path's pixels back to its subtile: a static path's pixels are (x - y) * 16 and (x + y) * 8 of its subtile (0x334E00),
+// a dynamic path's the same of its 16.16 place (0x334DE0 on the place >> 11).
+constexpr int32_t floor_div(int32_t a, int32_t b) { return a / b - ((a % b != 0) && ((a < 0) != (b < 0)) ? 1 : 0); }
+constexpr int32_t subtile_x(int32_t px, int32_t py) { return floor_div(px + 2 * py, 32); }
+constexpr int32_t subtile_y(int32_t px, int32_t py) { return floor_div(2 * py - px, 32); }
+// Whether a mark at these pixels stands in one of the rooms a read went over.
+inline bool in_rooms(const std::vector<RoomBox>& rooms, int32_t px, int32_t py) {
+  const int32_t x = subtile_x(px, py), y = subtile_y(px, py);
+  for (const RoomBox& r : rooms)
+    if (x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1) return true;
+  return false;
+}
+
 // --- The names of named enemies the server has made (read ahead, before the client knows them) ----------------------
 //
 // The client names a monster in the handler its naming mods run (0x1DE620, sites::NameFacts), into string ids it keeps
@@ -411,6 +463,7 @@ void set_services(const D2RL::PluginContext* ctx, const D2RL::DataTableService* 
 // After sites::derive() and game::bind(): sets the two switches' why_not (ui_thread: the loader gives UI callbacks).
 // hooks::install says first whether the automap's draw of one unit is hooked.
 void set_draw_hooked(bool hooked);
+bool draw_hooked();  // ... and whether it is (maploot.cpp draws in the same hook)
 void bind(bool ui_thread);
 bool landmarks_ready();  // the landmarks can be put on (bind found what they need)
 bool enemies_ready();    // ... the named enemies' spawn spots can be read (their drawing is the hook's)
@@ -425,12 +478,13 @@ int objects_found(uint8_t bank, int level, const PlacedObject* objects, size_t c
 bool found_waiting();
 void put_found(uint64_t now_ms);
 
-// The named enemies the server has made in the rooms of an area (the server thread, roomfill.cpp, as the character
-// enters it once its rooms are filled: every monster that stands in them, alive): those that are named are marked where
-// they stand with the name the client would give them, and the area's earlier marks of the server's monsters that are
-// not among them go (they died or left it). Returns how many are named. The marks are put on the automap's layer of their
-// level at its next draw (the UI thread).
-int monsters_found(uint8_t bank, int level, Unit* const* monsters, size_t count);
+// The enemies the server has made in the rooms of an area (the server thread, roomfill.cpp, as the character enters it
+// once its rooms are filled: every monster that stands in them, alive): the named ones are marked where they stand with
+// the name the client would give them, and under "All enemies" the others too; the area's earlier marks that are not
+// among them go (they died or left it), but for those outside the rooms read (`rooms`: the built ones, whose units
+// these are; the server keeps the others' saved). Returns how many are named. The marks are put on the automap's layer
+// of their level at its next draw (the UI thread).
+int monsters_found(uint8_t bank, int level, Unit* const* monsters, size_t count, const std::vector<RoomBox>& rooms);
 
 // Game thread (the tick): the Objects, MonStats, SuperUniques and Levels rows the two read, and the names, per table
 // bank. Once a bank is read it is kept.
@@ -444,7 +498,8 @@ void area_begins(int level_id, int layer, uint8_t bank, bool landmarks, bool ene
 void room(void* drlg_room, void* active_room);
 void area_ends();
 
-// The hook on the automap's draw of one unit (the thread that draws the automap), after the game's own draw.
+// Each unit the automap's draw of one unit is handed (the thread that draws the automap), from the hook on the
+// marker decision it asks first: after the game's decision, before the game draws the unit's own marker.
 void unit_drawn(Unit* unit, const void* view);
 
 void game_left();
@@ -465,6 +520,7 @@ struct Stats {
   unsigned rolled = 0;     // objects the game rolled ahead put on the map (shrines, wells ...)
   unsigned ahead = 0;      // named enemies read from the server's side as their areas were entered (each once a game)
   unsigned names_off = 0;  // ... whose name worked out was not the one the client gave them when it drew them
+  unsigned plain = 0;      // enemies that are not named on the map now ("All enemies")
 };
 Stats stats();
 

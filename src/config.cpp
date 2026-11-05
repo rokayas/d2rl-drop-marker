@@ -103,8 +103,15 @@ std::string value_of(const Settings& s, const std::string& key) {
   if (key == "area_level_waypoints") return s.area_level_waypoints ? "true" : "false";
   if (key == "reveal_map") return s.reveal_map ? "true" : "false";
   if (key == "map_named_enemies") return s.map_named_enemies ? "true" : "false";
+  if (key == "map_enemy_tier") return std::string("\"") + enemy_tier_name(s.map_enemy_tier) + "\"";
+  if (key == "map_enemy_names") return s.map_enemy_names ? "true" : "false";
   if (key == "map_landmarks") return s.map_landmarks ? "true" : "false";
   if (key == "map_exit_names") return s.map_exit_names ? "true" : "false";
+  if (key == "map_chests") return s.map_chests ? "true" : "false";
+  if (key == "map_chest_tier") return std::string("\"") + chest_tier_name(s.map_chest_tier) + "\"";
+  if (key == "map_unique_items") return s.map_unique_items ? "true" : "false";
+  if (key == "map_set_items") return s.map_set_items ? "true" : "false";
+  if (key == "map_runes") return s.map_runes ? "true" : "false";
   if (key == "item_level") return s.item_level ? "true" : "false";
   if (key == "monster_health_bars") return s.monster_health_bars ? "true" : "false";
   if (key == "boss_health_bar") return s.boss_health_bar ? "true" : "false";
@@ -161,7 +168,8 @@ std::string value_of(const Settings& s, const std::string& key) {
 const char* const kOrder[] = {"enabled", "god_mode", "infinite_mana", "infinite_stamina", "exp_multiplier",
                               "move_speed_bonus", "exit_before_death", "exit_below_life_percent", "exit_method",
                               "terror_all_areas", "area_level_automap", "area_level_waypoints",
-                              "reveal_map", "map_named_enemies", "map_landmarks", "map_exit_names", "item_level",
+                              "reveal_map", "map_named_enemies", "map_enemy_tier", "map_enemy_names", "map_landmarks", "map_exit_names", "map_chests",
+                              "map_chest_tier", "map_unique_items", "map_set_items", "map_runes", "item_level",
                               "monster_health_bars", "boss_health_bar",
                               "boss_bar_position", "loot_filter_only", "chronicle_only", "extra_drops",
                               "extra_drops_elites_only",
@@ -220,8 +228,15 @@ bool set_from(Settings* s, const std::string& key, const std::string& raw) {
   if (key == "area_level_waypoints") return parse_bool(v, &s->area_level_waypoints);
   if (key == "reveal_map") return parse_bool(v, &s->reveal_map);
   if (key == "map_named_enemies") return parse_bool(v, &s->map_named_enemies);
+  if (key == "map_enemy_tier") return enemy_tier_from_name(unquote(v).c_str(), &s->map_enemy_tier);
+  if (key == "map_enemy_names") return parse_bool(v, &s->map_enemy_names);
   if (key == "map_landmarks") return parse_bool(v, &s->map_landmarks);
   if (key == "map_exit_names") return parse_bool(v, &s->map_exit_names);
+  if (key == "map_chests") return parse_bool(v, &s->map_chests);
+  if (key == "map_chest_tier") return chest_tier_from_name(unquote(v).c_str(), &s->map_chest_tier);
+  if (key == "map_unique_items") return parse_bool(v, &s->map_unique_items);
+  if (key == "map_set_items") return parse_bool(v, &s->map_set_items);
+  if (key == "map_runes") return parse_bool(v, &s->map_runes);
   if (key == "item_level") return parse_bool(v, &s->item_level);
   if (key == "monster_health_bars") return parse_bool(v, &s->monster_health_bars);
   if (key == "boss_health_bar") return parse_bool(v, &s->boss_health_bar);
@@ -421,6 +436,8 @@ void clamp(Settings* s) {
   if (s->extra_drops < 0) s->extra_drops = 0;
   if (s->extra_drops > 20) s->extra_drops = 20;
   if (s->home_town < 0 || s->home_town > 5) s->home_town = 0;
+  if (s->map_chest_tier < 0 || s->map_chest_tier > 2) s->map_chest_tier = 1;
+  if (s->map_enemy_tier < 0 || s->map_enemy_tier > 1) s->map_enemy_tier = 0;
   if (!(s->damage_multiplier >= 1.0f)) s->damage_multiplier = 1.0f;
   if (s->damage_multiplier > 100.0f) s->damage_multiplier = 100.0f;
   if (s->toggle_key <= 0 || s->toggle_key >= 256) s->toggle_key = 0x76;
@@ -444,6 +461,27 @@ const char* key_name(int vk) {
 }
 
 const char* exit_method_name(ExitMethod m) { return m == ExitMethod::kForceClose ? "force_close" : "save_and_exit"; }
+
+const char* chest_tier_name(int tier) { return tier == 0 ? "super" : tier == 2 ? "openable" : "chests"; }
+
+bool chest_tier_from_name(const char* name, int* out) {
+  if (!name || !*name) return false;
+  if (_stricmp(name, "super") == 0 || std::strcmp(name, "0") == 0) *out = 0;
+  else if (_stricmp(name, "chests") == 0 || _stricmp(name, "all") == 0 || std::strcmp(name, "1") == 0) *out = 1;
+  else if (_stricmp(name, "openable") == 0 || std::strcmp(name, "2") == 0) *out = 2;
+  else return false;
+  return true;
+}
+
+const char* enemy_tier_name(int tier) { return tier == 1 ? "all" : "named"; }
+
+bool enemy_tier_from_name(const char* name, int* out) {
+  if (!name || !*name) return false;
+  if (_stricmp(name, "named") == 0 || std::strcmp(name, "0") == 0) *out = 0;
+  else if (_stricmp(name, "all") == 0 || std::strcmp(name, "1") == 0) *out = 1;
+  else return false;
+  return true;
+}
 
 const char* log_level_name(LogLevel level) {
   return level == LogLevel::kError ? "error" : level == LogLevel::kWarning ? "warning" : "info";

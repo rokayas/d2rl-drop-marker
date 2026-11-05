@@ -104,6 +104,20 @@ using MapPointFn = uint64_t*(__fastcall*)(const void* view, uint64_t* out, uint6
 using MapMarkerFn = void(__fastcall*)(uint64_t point, uint32_t marker, float scale) noexcept;
 using MapNameFn = void(__fastcall*)(const char* text, uint64_t point, float scale, uint32_t color) noexcept;
 using UnitNameFn = const char*(__fastcall*)(Unit* unit) noexcept;
+// The game's sprite draw (sprite object, place, options, scale) and its sprite loader (sprite object, name, 0).
+struct alignas(16) SpriteOptions {
+  float tint[4];    // +0x00: {1, 1, 1, 0} none
+  float opacity;    // +0x10
+  int32_t zero14;   // +0x14
+  int32_t frame;    // +0x18
+  uint8_t rest[0xC0 - 0x1C];  // the routine's other options, 0 as the automap's own draws leave them (0xA4 bytes)
+};
+static_assert(sizeof(SpriteOptions) == 0xC0 && offsetof(SpriteOptions, opacity) == 0x10 &&
+                  offsetof(SpriteOptions, frame) == 0x18,
+              "the options block the automap's draws build");
+using SpriteDrawFn = void(__fastcall*)(const void* sprite, const int32_t* place, const SpriteOptions* options,
+                                       float scale) noexcept;
+using SpriteLoadFn = void(__fastcall*)(void* sprite, const char* name, uint8_t flags) noexcept;
 
 GetStatFn g_get = nullptr;
 GetStatFn g_get_base = nullptr;
@@ -176,6 +190,8 @@ MapPointFn g_map_point = nullptr;
 MapMarkerFn g_map_marker = nullptr;
 MapNameFn g_map_name = nullptr;
 UnitNameFn g_unit_name = nullptr;
+SpriteDrawFn g_sprite_draw = nullptr;
+SpriteLoadFn g_sprite_load = nullptr;
 uintptr_t g_key_press[kKeyActionCount] = {};  // the entry's press function as bind checked it (0: unusable)
 bool g_key_wrapped[kKeyActionCount] = {};
 constexpr int kPanels = 32;     // the panel gate's (its walk: `cmp ebx, 20h`)
@@ -218,6 +234,10 @@ constexpr uintptr_t kSkillRowClass = 0x2C;
 constexpr int kMaxSkillNodes = 512;
 constexpr uintptr_t kGameDataCtx = 0x106;  // Game: the data-table context byte the stat list free takes
 constexpr uintptr_t kGameDifficulty = 0x104;  // ... and its difficulty (0 normal, 1 nightmare, 2 hell)
+// An object's sparkle (the unit's own byte, set through 0x491910 (unit, value)): 0 from every object's init (0x510BA0),
+// 1 a super chest's - InitFn 57 (0x50EAC0) and a layout's unique chest placed (0x50FB20's tail, 0x50FE03) -, 2 the
+// object 0x592210 makes (class 162). The server's units only: the client's object packet (0x51) carries none of it.
+constexpr uintptr_t kObjectSparkle = 0xC8;
 // An object's data: its destination level, low and high byte (the getter 0x34AD40, D2RCore's setter).
 constexpr uintptr_t kObjectDestLow = 0x08;
 constexpr uintptr_t kObjectDestHigh = 0x78;
@@ -240,6 +260,7 @@ constexpr uintptr_t kPathRoom = 0x20;
 constexpr uintptr_t kActiveRoomDrlgRoom = 0x18;
 constexpr uintptr_t kRoomLevel = 0x90;
 constexpr uintptr_t kRoomNext = 0x48;
+constexpr uintptr_t kRoomTiles = 0x60;  // a DRLG room's place: x, y, width, height in tiles (int32 each)
 constexpr uintptr_t kLevelFirstRoom = 0x10;
 constexpr uintptr_t kLevelDrlg = 0x1C8;
 constexpr uintptr_t kLevelId = 0x1F8;
@@ -427,6 +448,9 @@ bool bind() {
     g_map_marker = m.draw ? reinterpret_cast<MapMarkerFn>(m.draw_marker) : nullptr;
     g_map_name = m.draw ? reinterpret_cast<MapNameFn>(m.draw_name) : nullptr;
     g_unit_name = m.draw ? reinterpret_cast<UnitNameFn>(m.unit_name) : nullptr;
+    const sites::SpriteFacts& s = sites::sprite_facts();
+    g_sprite_draw = s.known && m.draw ? reinterpret_cast<SpriteDrawFn>(s.draw) : nullptr;
+    g_sprite_load = s.known && m.draw ? reinterpret_cast<SpriteLoadFn>(s.load) : nullptr;
   }
   bind_key_actions();
   bind_automap_closers();
@@ -503,6 +527,10 @@ uint32_t unit_mode(Unit* u) {
   uint32_t v = 0;
   mem::read_safe(reinterpret_cast<uintptr_t>(u) + 0x0C, &v);
   return v;
+}
+int object_sparkle(Unit* u) {
+  uint8_t v = 0;
+  return u && unit_type(u) == kObject && mem::read_safe(reinterpret_cast<uintptr_t>(u) + kObjectSparkle, &v) ? v : -1;
 }
 bool unit_dead_flag(Unit* u) {
   uint32_t v = 0;
@@ -1202,6 +1230,17 @@ void* room_next(void* room) {
   return room ? reinterpret_cast<void*>(mem::read_ptr(reinterpret_cast<uintptr_t>(room) + kRoomNext)) : nullptr;
 }
 
+bool room_tiles(void* room, int32_t* x, int32_t* y, int32_t* w, int32_t* h) {
+  int32_t r[4] = {};
+  if (!room || !mem::copy_from(r, reinterpret_cast<uintptr_t>(room) + kRoomTiles, sizeof(r)) || r[2] <= 0 || r[3] <= 0)
+    return false;
+  *x = r[0];
+  *y = r[1];
+  *w = r[2];
+  *h = r[3];
+  return true;
+}
+
 bool reveal_room(uint8_t bank, void* room) {
   if (!room || !g_create_room || !g_automap_room) return false;
   void* active = g_create_room(bank, room);
@@ -1290,6 +1329,100 @@ const char* client_unit_name(Unit* u) { return g_unit_name && u ? g_unit_name(u)
 bool unit_pixels(Unit* u, int32_t* x, int32_t* y) {
   const uintptr_t path = u ? mem::read_ptr(reinterpret_cast<uintptr_t>(u) + kUnitPath) : 0;
   return path && mem::read_safe(path + 0x08, x) && mem::read_safe(path + 0x0C, y);
+}
+
+// Icons on the automap. The view's fields the list draw reads (sites::SpriteFacts checks them in its code): +0x10 /
+// +0x14 the centre, +0x28 / +0x2C the origin, +0x30 / +0x34 the scale, +0x38 the icons' scale.
+constexpr uintptr_t kViewCentre = 0x10;
+constexpr uintptr_t kViewOrigin = 0x28;
+constexpr uintptr_t kViewCellScale = 0x30;
+constexpr uintptr_t kSpriteObject = 0x10;  // {HD sprite, legacy sprite}
+constexpr int kMaxTileChunks = 64;
+
+bool has_map_sprites() { return g_sprite_draw && g_sprite_load && g_map_point; }
+
+bool map_view(const void* view, MapView* out) {
+  const uintptr_t v = reinterpret_cast<uintptr_t>(view);
+  int32_t centre[2] = {}, origin[2] = {};
+  float scale[2] = {}, icons = 0.0f;
+  if (!v || !mem::copy_from(centre, v + kViewCentre, sizeof(centre)) ||
+      !mem::copy_from(origin, v + kViewOrigin, sizeof(origin)) || !mem::copy_from(scale, v + kViewCellScale, sizeof(scale)) ||
+      !mem::read_safe(v + kViewScale, &icons) || !(scale[0] > 0.0f) || !(scale[1] > 0.0f) || !(icons > 0.0f))
+    return false;
+  *out = MapView{centre[0], centre[1], origin[0], origin[1], scale[0], scale[1], icons};
+  return true;
+}
+
+const void* map_tile_sprite(int cell, int* frame) {
+  const sites::SpriteFacts& s = sites::sprite_facts();
+  int32_t per_chunk = 0, total = 0;
+  uint64_t chunks = 0;
+  if (!s.known || cell < 0 || !mem::read_safe(s.tile_per_chunk, &per_chunk) || !mem::read_safe(s.tile_total, &total) ||
+      per_chunk <= 0 || cell >= total || !mem::read_safe(s.tile_chunks + 8, &chunks))
+    return nullptr;
+  const uint64_t chunk = static_cast<uint64_t>(cell / per_chunk);
+  const uintptr_t sprites = mem::read_ptr(s.tile_chunks);
+  if (!sprites || chunk >= chunks || chunks > kMaxTileChunks) return nullptr;
+  *frame = cell % per_chunk;
+  return reinterpret_cast<const void*>(sprites + static_cast<uintptr_t>(chunk) * kSpriteObject);
+}
+
+const void* map_cross_sprite(int32_t* width, int32_t* height) {
+  const sites::SpriteFacts& s = sites::sprite_facts();
+  int32_t size[2] = {};
+  if (!s.known || !mem::copy_from(size, s.cross_size, sizeof(size)) || size[0] <= 0 || size[1] <= 0) return nullptr;
+  *width = size[0];
+  *height = size[1];
+  return reinterpret_cast<const void*>(s.crosses);
+}
+
+// The sprite object holds the sprite of the graphics in use (the draw takes the HD one in HD graphics, the legacy one
+// otherwise): nothing is drawn without it.
+void map_draw_sprite(const void* sprite, int frame, int32_t x, int32_t y, float scale, float r, float g, float b) {
+  if (!g_sprite_draw || !sprite) return;
+  const uintptr_t which = mem::read_ptr(reinterpret_cast<uintptr_t>(sprite) + (hd_graphics() ? 0 : 8));
+  if (!which) return;
+  SpriteOptions o{};
+  o.tint[0] = r;
+  o.tint[1] = g;
+  o.tint[2] = b;
+  o.tint[3] = 0.0f;
+  o.opacity = 1.0f;
+  o.frame = frame;
+  const int32_t place[2] = {x, y};
+  g_sprite_draw(sprite, place, &o, scale);
+}
+
+bool load_sprite(void* sprite, const char* name) {
+  if (!g_sprite_load || !sprite || !name || !name[0]) return false;
+  g_sprite_load(sprite, name, 0);
+  return mem::read_ptr(reinterpret_cast<uintptr_t>(sprite)) || mem::read_ptr(reinterpret_cast<uintptr_t>(sprite) + 8);
+}
+
+// The loader lets go of what the object holds before it loads, and loads nothing for an empty name (0x858990: both
+// sprites released through 0x79E310 / 0x79D200 and set to 0, then `if (*name)`): so an empty name only releases.
+bool release_sprite(void* sprite) {
+  const uintptr_t s = reinterpret_cast<uintptr_t>(sprite);
+  if (!g_sprite_load || !sprite || (!mem::read_ptr(s) && !mem::read_ptr(s + 8))) return false;
+  g_sprite_load(sprite, "", 0);
+  return true;
+}
+
+bool sprite_size(const void* sprite, int32_t* width, int32_t* height) {
+  const sites::SpriteFacts& s = sites::sprite_facts();
+  const uintptr_t hd = sprite ? mem::read_ptr(reinterpret_cast<uintptr_t>(sprite)) : 0;
+  return hd && s.hd_width_at > 0 && s.hd_height_at > 0 &&
+         mem::read_safe(hd + static_cast<uintptr_t>(s.hd_width_at), width) &&
+         mem::read_safe(hd + static_cast<uintptr_t>(s.hd_height_at), height);
+}
+
+int sprite_frames(const void* sprite) {
+  const int at = sites::sprite_facts().hd_frames_at;
+  const uintptr_t hd = sprite ? mem::read_ptr(reinterpret_cast<uintptr_t>(sprite)) : 0;
+  uint32_t frames = 0;
+  return hd && at > 0 && mem::read_safe(hd + static_cast<uintptr_t>(at), &frames) && frames < 0x10000
+             ? static_cast<int>(frames)
+             : 0;
 }
 
 bool has_key_action(KeyAction a) {

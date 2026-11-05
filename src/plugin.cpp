@@ -36,6 +36,7 @@
 #include "itemlevel.h"
 #include "itemseed.h"
 #include "loot.h"
+#include "maploot.h"
 #include "mapmarks.h"
 #include "mapreveal.h"
 #include "roomfill.h"
@@ -65,7 +66,8 @@ constexpr D2RL::PluginInfo kInfo{
                    "pick them up, imbues, sockets and "
                    "personalizing without their quests, cube recipes that use nothing up, gear without its level, "
                    "strength and dexterity requirements, no durability loss, respec "
-                   "and skill presets, map reveal, named enemies, landmarks and where each exit leads on the map, "
+                   "and skill presets, map reveal, named enemies, landmarks, chests, unique, set and rune items and "
+                   "where each exit leads on the map, "
                    "health bars for monsters and act bosses, a home town of your choice, and the automap and Show "
                    "Items kept the way you left them between games.",
     .flags = D2RL::PluginFlags::Shared | D2RL::PluginFlags::NativeHooks,
@@ -84,6 +86,7 @@ const D2RL::ThreadService* g_threads = nullptr;
 const D2RL::WidgetService* g_widgets = nullptr;
 const D2RL::DataTableService* g_tables = nullptr;
 const D2RL::LocalizationService* g_strings = nullptr;
+const D2RL::ResourceService* g_resources = nullptr;
 volatile LONG g_ui_ready = 0;     // the loader accepted work for its UI thread (it refuses during load)
 volatile LONG g_exit_phase = 0;   // 0 idle, 1 Save and Exit queued for the UI thread, 2 dispatched
 ULONGLONG g_exit_started = 0;
@@ -145,7 +148,7 @@ void log_settings() {
        "noaffixes=%d unfreezable=%d unpoisonable=%d uncursable=%d tp=%d id=%d "
        "autoid=%d potions=%d keys=%d gold=%d imbue=%d addsockets=%d personalize=%d cube=%d requirements=%d/%d "
        "durability=%d home=%d "
-       "map=%d enemies=%d landmarks=%d exits=%d keep map=%d items=%d unfiltered=%d (remembered %d/%d/%d) log=%d/%s "
+       "map=%d enemies=%d/%s/names=%d landmarks=%d exits=%d keep map=%d items=%d unfiltered=%d (remembered %d/%d/%d) log=%d/%s "
        "trace=%d",
        static_cast<double>(g_settings.damage_multiplier), g_settings.invincible_mercenary,
        g_settings.invincible_minions, g_settings.passive_mercenary, g_settings.passive_minions,
@@ -156,7 +159,8 @@ void log_settings() {
        g_settings.infinite_imbue, g_settings.infinite_sockets, g_settings.infinite_personalize,
        g_settings.infinite_cube_ingredients, g_settings.ignore_requirements, g_settings.ignore_requirements_mercenary,
        g_settings.no_durability_loss, g_settings.home_town, g_settings.reveal_map,
-       g_settings.map_named_enemies, g_settings.map_landmarks, g_settings.map_exit_names, g_settings.remember_automap,
+       g_settings.map_named_enemies, config::enemy_tier_name(g_settings.map_enemy_tier), g_settings.map_enemy_names,
+       g_settings.map_landmarks, g_settings.map_exit_names, g_settings.remember_automap,
        g_settings.remember_show_items, g_settings.remember_show_items_unfiltered, g_settings.automap_was_open,
        g_settings.show_items_was_on, g_settings.show_items_unfiltered_was_on, g_settings.logging,
        config::log_level_name(g_settings.log_level), g_settings.trace);
@@ -283,6 +287,7 @@ void __cdecl ui_pump(const D2RL::PluginContext* ctx, void*) noexcept {
     healthbars::collect();
     character::on_ui();  // a preset save, at once even while the Esc menu pauses the game
     mapreveal::on_ui(now);
+    maploot::on_ui(now);  // the map's item icons loaded by the game's sprite loader, once
     remember::on_ui(now);
   }
   // A refused re-queue would end the chain; the watchdog then probes again.
@@ -328,6 +333,7 @@ DWORD WINAPI watchdog_thread(void*) {
     }
     exit_watch(now);
     overlay::watch(now);
+    hooks::install_wanted();  // a hook that waits for a switch (one read while nothing waits)
     const bool by_the_clock = (!g_ui_ready && g_threads) || g_exit_phase != 0 || remember::save_waits() ||
                               perf::sampling();
     if (g_wake) WaitForSingleObject(g_wake, by_the_clock ? kWatchdogBusyMs : kWatchdogIdleMs);
@@ -371,6 +377,12 @@ void start_pump() {
     g_widgets = nullptr;
     log_warn("WidgetService unavailable: Save and Exit falls back to closing the game");
   }
+  // The map's icons for unique, set and rune items: files of the plugin's, registered with the loader as it loads.
+  if (ctx->QueryService(&g_resources) != D2RL::ServiceQueryResult::Success ||
+      !D2RL::HasResourceServiceField(g_resources, D2RL::ResourceServiceRequiredSize) || !g_resources->registerResource)
+    g_resources = nullptr;
+  maploot::set_services(ctx, g_tables, g_resources);
+  maploot::register_icons(false);
 }
 
 // --- the worker: bind everything once the image is there ------------------------------------
@@ -397,13 +409,16 @@ DWORD WINAPI worker(void*) {
   const int usable = sites::resolve(base);
   InterlockedExchange(&g_sites_usable, usable);
   sites::derive();
-  logf("sites: %d of %d routines resolved exactly once (guarded-read faults so far: %ld)", usable,
-       static_cast<int>(sites::kCount), mem::guard_faults());
+  logf("sites: %d of %d routines resolved exactly once, %d of them behind another plugin's hook (guarded-read faults so "
+       "far: %ld)",
+       usable, static_cast<int>(sites::kCount), sites::taken_count(), mem::guard_faults());
   game::bind();
   hooks::install();
   healthbars::bind(g_threads != nullptr);
   mapreveal::bind(g_threads != nullptr);
   mapmarks::bind(g_threads != nullptr);
+  if (!maploot::icons_registered()) maploot::register_icons(true);  // the files the loader took only once loaded
+  maploot::bind(g_threads != nullptr);
   roomfill::bind();
   remember::bind(g_threads != nullptr);
   g_bound = true;
@@ -468,6 +483,7 @@ void __cdecl on_gameplay_event(const D2RL::PluginContext*, const D2RL::Lifecycle
     character::game_left();
     mapreveal::game_left();
     mapmarks::game_left();
+    maploot::game_left();
     roomfill::game_left();
     remember::game_left();
     terror::game_left();
@@ -663,7 +679,7 @@ D2RL::ConsoleCommandResult __cdecl on_console(D2R::Game::Client*, const D2RL::Co
   const D2RL::PluginContext* ctx = cmd->plugin;
   const char* args = cmd->args ? cmd->args : "";
   while (*args == ' ') ++args;
-  char line[512];
+  char line[1024];
   auto say = [&](const char* text) { ctx->WriteConsoleMessage(text); };
   if (!std::strncmp(args, "panel", 5)) {
     overlay::set_forced(!overlay::visible());
@@ -751,6 +767,8 @@ D2RL::ConsoleCommandResult __cdecl on_console(D2R::Game::Client*, const D2RL::Co
                                      {"durability", cheats::kNoDurabilityLoss}, {"tz", cheats::kTerrorAll},
                                      {"map", cheats::kRevealMap}, {"enemies", cheats::kMapEnemies},
                                      {"landmarks", cheats::kMapLandmarks}, {"exits", cheats::kMapExits},
+                                     {"chests", cheats::kMapChests}, {"uniques", cheats::kMapUniques},
+                                     {"sets", cheats::kMapSets}, {"runes", cheats::kMapRunes},
                                      {"ilvl", cheats::kItemLevel},
                                      {"keepmap", cheats::kRememberAutomap},
                                      {"keepitems", cheats::kRememberShowItems},
@@ -816,6 +834,33 @@ D2RL::ConsoleCommandResult __cdecl on_console(D2R::Game::Client*, const D2RL::Co
       }
       say("cabbycodes: preset save <name> | preset load <name>");
     }
+    return D2RL::ConsoleCommandResult::Handled;
+  }
+  if (!std::strncmp(args, "enemytier ", 10)) {
+    int tier = 0;
+    if (!config::enemy_tier_from_name(args + 10, &tier)) return D2RL::ConsoleCommandResult::InvalidArguments;
+    cheats::set_enemy_tier(tier);
+    overlay::on_setting_changed();
+    std::snprintf(line, sizeof(line), "cabbycodes: enemies on the map: %s", mapmarks::kEnemyTierNames[cheats::enemy_tier()]);
+    say(line);
+    return D2RL::ConsoleCommandResult::Handled;
+  }
+  if (!std::strncmp(args, "enemynames ", 11)) {
+    const char* v = args + 11;
+    const bool on = !std::strcmp(v, "on"), off = !std::strcmp(v, "off");
+    if (!on && !off) return D2RL::ConsoleCommandResult::InvalidArguments;
+    cheats::set_enemy_names(on);
+    overlay::on_setting_changed();
+    say(on ? "cabbycodes: named enemies' names on the map: on" : "cabbycodes: named enemies' names on the map: off");
+    return D2RL::ConsoleCommandResult::Handled;
+  }
+  if (!std::strncmp(args, "chesttier ", 10)) {
+    int tier = 1;
+    if (!config::chest_tier_from_name(args + 10, &tier)) return D2RL::ConsoleCommandResult::InvalidArguments;
+    cheats::set_chest_tier(tier);
+    overlay::on_setting_changed();
+    std::snprintf(line, sizeof(line), "cabbycodes: chests on the map: %s", maploot::kTierNames[cheats::chest_tier()]);
+    say(line);
     return D2RL::ConsoleCommandResult::Handled;
   }
   if (!std::strncmp(args, "drops ", 6)) {
@@ -1084,17 +1129,32 @@ D2RL::ConsoleCommandResult __cdecl on_console(D2R::Game::Client*, const D2RL::Co
     std::snprintf(line, sizeof(line),
                   "map: landmarks=%d%s%s, this game %u areas, %u object icons and %u waypoint tiles put on, %u areas "
                   "filled ahead (%u rooms built for the game to fill) and %u of the objects it rolled put on; "
-                  "enemies=%d%s%s, %u spawn spots read, %u named enemies read ahead from the server (%u names "
+                  "enemies=%d%s%s (%s, names %s), %u spawn spots read, %u named enemies read ahead from the server (%u names "
                   "worked out otherwise than the client's), %u drawn by the client (%u marks on the map now), %u marks "
-                  "let go as their monster died",
+                  "let go as their monster died; %u other enemies on the map",
                   cheats::enabled(cheats::kMapLandmarks), lm_why ? " - " : "", lm_why ? lm_why : "", ms.areas, ms.icons,
                   ms.waypoints, rf.areas, rf.rooms, ms.rolled, cheats::enabled(cheats::kMapEnemies),
-                  en_why ? " - " : "", en_why ? en_why : "", ms.spots, ms.ahead, ms.names_off, ms.drawn, ms.kept,
-                  ms.dead);
+                  en_why ? " - " : "", en_why ? en_why : "", mapmarks::kEnemyTierNames[cheats::enemy_tier()],
+                  cheats::enemy_names() ? "on" : "off", ms.spots, ms.ahead, ms.names_off, ms.drawn, ms.kept, ms.dead,
+                  ms.plain);
     say(line);
     std::snprintf(line, sizeof(line), "map: exits=%d%s%s, %u areas, %u warps and %u openings named (%u on the map now)",
                   cheats::enabled(cheats::kMapExits), ex_why ? " - " : "", ex_why ? ex_why : "", ms.exit_areas,
                   ms.warps, ms.borders, ms.exits);
+    say(line);
+    // Chests and items on the map: the switches, why they cannot work, and what this game came to.
+    const maploot::Stats ls = maploot::stats();
+    const char* lc_why = cheats::why_not(cheats::kMapChests);
+    std::snprintf(line, sizeof(line),
+                  "map: chests=%d (%s)%s%s, %u known in this game (%u of them from areas filled ahead), %u seen "
+                  "opened, %u gone from where a read looked; %u the game throws away as it lets their rooms go (%u near "
+                  "you, drawn now); uniques=%d sets=%d runes=%d, %u items on the map now, %u marked in this game, %u "
+                  "seen picked up, %u reads of an area's items; their icons %s",
+                  cheats::enabled(cheats::kMapChests), maploot::kTierNames[cheats::chest_tier()], lc_why ? " - " : "",
+                  lc_why ? lc_why : "", ls.chests, rf.chests, ls.chests_open, ls.chests_gone, ls.fleeting,
+                  ls.fleeting_near, cheats::enabled(cheats::kMapUniques),
+                  cheats::enabled(cheats::kMapSets), cheats::enabled(cheats::kMapRunes), ls.items, ls.items_seen,
+                  ls.picked_up, ls.reads, ls.icons_loaded ? "loaded" : ls.icons_why ? ls.icons_why : "not loaded");
     say(line);
   }
   const terror::Stats terror_stats = terror::stats();
@@ -1132,7 +1192,9 @@ D2RL::ConsoleCommandResult __cdecl on_console(D2R::Game::Client*, const D2RL::Co
       "gold on|off | imbue on|off | addsockets on|off | personalize on|off | cube on|off | requirements on|off | "
       "mercrequirements on|off | durability on|off | "
       "home 0..5 | "
-      "map on|off | enemies on|off | landmarks on|off | ilvl on|off | keepmap on|off | keepitems on|off | "
+      "map on|off | enemies on|off | landmarks on|off | exits on|off | chests on|off | "
+      "enemytier named|all | enemynames on|off | chesttier super|chests|openable | uniques on|off | sets on|off | runes on|off | ilvl on|off | keepmap on|off | "
+      "keepitems on|off | "
       "keepunfiltered on|off | log on|off | "
       "loglevel info|warning|error | respec | preset [save|load <name>] | "
       "save | sites | dump | dropcheck [walks] | perf [seconds]");

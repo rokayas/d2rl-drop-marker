@@ -24,6 +24,21 @@ struct Unit;
 // same way as it is entered, and the monsters in its rooms are read from the server's side and handed to mapmarks,
 // which marks the named ones with the name the client would give them; an area filled before is read again each time
 // it is entered.
+//
+// Chests on the map (2026-11-02): a chest the object groups roll (Act 1's outdoor chests, most dungeons') exists nowhere
+// before its room is filled either, so under the switch every area but a town is filled the same way, and its objects
+// (id, class, mode, place) are handed to maploot, which keeps those that open for loot; read again as it is entered.
+// Unique, set and rune items on the map: the items on the ground of the area the character is in, read from its built
+// rooms when something dropped (the drop core), when an area is entered and when a switch changes (no room is built
+// for them: an item lies only where the game has been near).
+//
+// The server lets a built room go some 5 s after no player is near it (mapmarks.h RoomBox: its units saved, made again
+// as a player comes near), the rooms built for a read among them. So an area's full read (its rooms built, filled, every
+// one read) is made as it is first entered and again only when a switch asks for more than the last one brought (All
+// enemies, the chests, the landmarks switched on in an area read before: the rooms let go are built again and the game
+// makes their saved units again); every other read (an area entered again, a switch changed, something dropped) reads
+// the rooms built now, and a mark outside them stays (2026-11-03: "the enemies only show within a small proximity with
+// the user instead of for the whole area": until then those reads took away every mark they did not see).
 namespace d2rcc::roomfill {
 
 using game::Unit;
@@ -42,6 +57,7 @@ struct Stats {
   unsigned rooms = 0;    // ... rooms built for the game to fill
   unsigned objects = 0;  // ... objects with an icon handed to the map
   unsigned monsters = 0; // ... named monsters handed to the map (the areas' first reads)
+  unsigned chests = 0;   // ... objects that open for loot handed to the map (the areas' first reads)
 };
 Stats stats();
 
