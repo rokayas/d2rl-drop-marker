@@ -1018,6 +1018,21 @@ void derive() {
   }
   // Which side panels are open: the setter stores its argument (`mov [rip+disp], ecx`) right after the prologue.
   if (const uintptr_t f = address(kPanelSideSet)) g_derived[dPanelSide] = rip_operand(f + 15, 2, 6);
+  // The light pillars (a local addition): the above-head helper is `call root; mov rcx, [rax+0x20]; test rcx, rcx; jz;
+  // mov r9b, 1; lea r8, [rsp+0x60]; mov rdx, rbx; call project` - its signature holds every byte of that but the two
+  // calls' targets, which are named here (both inside the game's code, or neither is used).
+  if (const uintptr_t f = address(kProjectAboveHead)) {
+    const uintptr_t root = call_at(f + 14), project = call_at(f + 39);
+    const mem::Range image = mem::module_range(g_base);
+    if (root && project && image.contains(root) && image.contains(project)) {
+      g_derived[dRenderContextRoot] = root;
+      g_derived[dProjectUnit] = project;
+      logf("sites: the unit projection at +0x%llX, the getter of its context root at +0x%llX",
+           static_cast<unsigned long long>(project - g_base), static_cast<unsigned long long>(root - g_base));
+    } else {
+      log_warn("sites: the above-head helper's two calls not read as expected - no light pillars");
+    }
+  }
   // The field that links a bucket's units: the walk's `mov rcx, [rax+disp32]` (a unit is well under 4 KiB).
   g_unit_next = 0;
   if (const uintptr_t walk = address(kUnitListNext)) {

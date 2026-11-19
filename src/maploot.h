@@ -266,6 +266,10 @@ struct ServerItem {
 };
 // The items on the ground of a server unit, if it is one the switches can show (else kItemNone).
 ItemKind ground_item_kind(Unit* item);
+// A local addition (the light pillars, pillars.h). An item unit lying on the ground that is a rune or one of track.h's
+// other rare drops: which of the two (else kItemNone), a rune's number (0: none of r01 .. r33) and another drop's group
+// (-1: a rune). The client's units or the server's, any thread: the tables are only read once they are ready.
+ItemKind ground_drop(Unit* item, int* rune_number, int* group);
 // The items of the rooms read (`rooms`: the area's built rooms, whose units these are): the area's earlier marks in those
 // rooms that are not among them go; those in other rooms stay (the server let those rooms go, the items saved with them).
 int items_found(uint8_t bank, int level, const ServerItem* items, size_t count,

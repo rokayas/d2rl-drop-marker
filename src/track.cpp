@@ -9,6 +9,8 @@ namespace {
 volatile LONG64 g_runes = static_cast<LONG64>(kAllRunes);
 volatile LONG g_groups = static_cast<LONG>(kDefaultGroups);
 volatile LONG g_icons = 1;
+volatile LONG64 g_pillar_runes = static_cast<LONG64>(kDefaultPillarRunes);
+volatile LONG g_pillar_groups = static_cast<LONG>(kDefaultPillarGroups);
 
 }  // namespace
 
@@ -46,5 +48,30 @@ void set_group(int g, bool on) {
   if (on) InterlockedOr(&g_groups, bit);
   else InterlockedAnd(&g_groups, ~bit);
 }
+
+void init_pillars(uint64_t runes, uint32_t groups) {
+  InterlockedExchange64(&g_pillar_runes, static_cast<LONG64>(runes & kAllRunes));
+  InterlockedExchange(&g_pillar_groups, static_cast<LONG>(groups & kAllGroups));
+}
+
+uint64_t pillar_runes() { return static_cast<uint64_t>(g_pillar_runes) & kAllRunes; }
+uint32_t pillar_groups() { return static_cast<uint32_t>(g_pillar_groups) & kAllGroups; }
+
+bool pillar_rune(int number) {
+  return number >= 1 && number <= kRunes && ((static_cast<uint64_t>(g_pillar_runes) >> (number - 1)) & 1) != 0;
+}
+
+void set_pillar_runes(uint64_t mask) { InterlockedExchange64(&g_pillar_runes, static_cast<LONG64>(mask & kAllRunes)); }
+
+bool pillar_group(int g) { return g >= 0 && g < kGroups && ((static_cast<uint32_t>(g_pillar_groups) >> g) & 1) != 0; }
+
+void set_pillar_group(int g, bool on) {
+  if (g < 0 || g >= kGroups) return;
+  const LONG bit = static_cast<LONG>(1u << g);
+  if (on) InterlockedOr(&g_pillar_groups, bit);
+  else InterlockedAnd(&g_pillar_groups, ~bit);
+}
+
+bool any_pillars() { return pillar_runes() != 0 || pillar_groups() != 0; }
 
 }  // namespace d2rcc::track

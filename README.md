@@ -10,7 +10,13 @@ statues. When one of those drops it gets
 - a **line in the game's chat** ("Ber Rune dropped"), and/or
 - a **pop-up on screen** for a few seconds.
 
-Each of the three is a switch. Anything you do not track is never shown. That is all the plugin does: no
+Each of the three is a switch. Since 1.5 a drop can also get
+
+- a **pillar of light** standing on it for as long as it lies on the ground near you, so you see it with the
+  map closed and after the line has scrolled away.
+
+The pillar is chosen drop by drop, with a tick box of its own beside every rune and every group: on your high
+runes only, say. Anything you neither track nor give a pillar is never shown. That is all the plugin does: no
 cheats, no console command, nothing about the game's rules is changed.
 
 ![The menu](docs/menu.png)
@@ -37,17 +43,21 @@ players of a game must share.
 Press **F7** in a game. The menu has
 
 - the three ways a tracked drop is shown, as tick boxes;
-- every rune, with **All**, **None** and "from a rune up" (pick Lem and everything from Lem to Zod is ticked);
-- the other drops as groups: keys, organs, essences, Worldstone Shards, statues, and the fragments
-  (Defender's, Protector's and Guardian's; off by default).
+- every rune with two tick boxes: **Track** (the one with its name) and **Pillar**. Each of the two has its own
+  **All**, **None** and "from a rune up" (pick Lem and everything from Lem to Zod is ticked);
+- the other drops as groups, with the same two boxes: keys, organs, essences, Worldstone Shards, statues, and
+  the fragments (Defender's, Protector's and Guardian's; not tracked by default).
+
+The two are apart: a rune can be tracked without a pillar, or have a pillar without being tracked. As
+installed, everything but the fragments is tracked, and Vex and every higher rune has a pillar.
 
 Choices are saved at once to `<game folder>\d2rloader\config\rune-marker.toml`. The file can also be edited by
 hand with the game closed; its comments explain every setting, including how to move the menu to another key
 and how to switch the plugin's log off. (The file and the log are named after the plugin's first name, Rune
 Marker. They keep that name so existing settings carry over.)
 
-Runes are marked with an orange rune stone and an orange line; the other drops with a gold star and a gold
-line.
+Runes are marked with an orange rune stone, an orange line and an orange pillar; the other drops with a gold
+star, a gold line and a gold pillar.
 
 ## What to expect
 
@@ -60,9 +70,17 @@ line.
   routine, the plugin notices and shows the line as a pop-up instead. The log says why.
 - Overlays that take over the game's frame presentation (Steam's, Discord's, RTSS) do not stop the menu: it is
   then drawn from the game's own present routine. The log notes it once.
-- A drop is announced once per game. Picking it up removes its icon.
-- It hooks five routines of the game, all through the loader: the present routine (for the menu), the
-  per-frame player tick, the drop routine, the item notice and the automap's marker decision.
+- Version 1.5.0 follows 1.0.0, with nothing between. D2RLoader remembers, for each character, the versions of
+  the plugins it was last played with, and warns ("Requires newer plugin") when an installed one is older.
+  This plugin's builds from before its first release carried the number 1.4.2, so the number had to pass that.
+- A drop is announced once per game. Picking it up removes its icon and its pillar.
+- The pillars are drawn over the game's picture, they are not lights in its world. So a pillar is not hidden
+  by a wall in front of it, it is there only for drops near your character (what the game has around you),
+  and it is left out where an open inventory or character panel covers its half of the screen, and under the
+  Esc menu. They need the game's HD graphics: legacy graphics show none, and the menu says so.
+- It hooks five routines of the game, all through the loader: the present routine (for the menu and the
+  pillars), the per-frame player tick, the drop routine, the item notice and the automap's marker decision.
+  It also listens to the game's UI messages, through the loader, for one thing: whether the Esc menu is open.
 
 ## Uninstall
 
@@ -84,7 +102,8 @@ Three tests run without the game; how to build each is at the top of its file:
 
 - `tests/test_track.cpp` - what is tracked, and the settings file read and written back
 - `tests/test_chatline.cpp` - finding and checking the loader's chat routine (needs a real `D2RCore.dll`)
-- `tests/test_trackmenu.cpp` - the menu, drawn and clicked without a screen
+- `tests/test_trackmenu.cpp` - the menu, drawn and clicked without a screen, and the pillar's look painted to
+  pictures
 
 ## Where it comes from
 
@@ -102,6 +121,8 @@ What was changed here, in November 2026:
 - tracking by choice (`src/track.*`) and the menu for it (`src/trackmenu.*`);
 - the line said as a tracked item drops, in the game's chat or as a pop-up (`src/chatline.*`, `src/toast.*`);
 - keys, organs, essences, Worldstone Shards, statues and fragments beside the runes;
+- the pillar of light on a chosen drop (`src/pillars.*`, `src/pillarart.h`), placed by the game's own
+  projection of a unit to the screen, the routine under the one CabbyCodes' health bars ask;
 - its own plugin id, settings file, log, version and name.
 
 Drop Marker is not SirCabby's release and he is not responsible for it. Problems with it belong in this

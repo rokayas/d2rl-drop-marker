@@ -51,6 +51,10 @@ struct Settings {
   uint64_t track_runes = (1ull << 33) - 1;
   uint32_t track_groups = 0x1F;      // keys, organs, essences, Worldstone Shards, statues; not the fragments
   bool map_icons = true;             // a tracked drop gets its icon on the map (with rune_message: the menu's Display)
+  // The light pillars (track.h, pillars.h): a choice of their own, the runes ("pillar_runes" in the file) and the
+  // groups (a "pillar_" key each). Vex and every higher rune, no group, unless the file says otherwise.
+  uint64_t pillar_runes = 0xFFull << 25;
+  uint32_t pillar_groups = 0;
   bool item_level = false;           // an item's level after its name (weapons, armor, jewelry, charms, jewels)
   bool monster_health_bars = false;  // a short life bar above every enemy on screen
   bool boss_health_bar = false;      // an act boss's life at the top centre while it is near

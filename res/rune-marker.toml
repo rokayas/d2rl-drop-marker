@@ -1,8 +1,9 @@
 # Drop Marker - settings.
 #
 # A cut-down build of CabbyCodes 1.4.2 (by SirCabby, GPL-3.0) that keeps one thing:
-# the runes and rare drops you choose get an icon on the map, and a line says so
-# as one drops. There are no cheats and no console command in this build.
+# the runes and rare drops you choose get an icon on the map, a line says so as
+# one drops, and a pillar of light can stand on it while it lies on the ground.
+# There are no cheats and no console command in this build.
 #
 # The easy way to change what is tracked is the menu in the game: press the menu
 # key (F7 unless changed below). The menu writes its choices into this file, in
@@ -13,7 +14,8 @@
 # false: the plugin loads and does nothing at all (nothing of the game is hooked).
 enabled = true
 
-# The master switch for the icons and the messages. false: nothing is tracked.
+# The master switch for the icons, the messages and the light pillars.
+# false: nothing is tracked and nothing is shown.
 map_runes = true
 
 # Which runes are tracked: "all", "none", or their names apart by spaces, for
@@ -49,6 +51,22 @@ rune_message = "chat"
 # plugin is on and which key opens its menu (it goes where rune_message says).
 # false: no such line.
 greeting = true
+
+# A pillar of light on the ground. It stands on a drop for as long as the drop
+# lies near you, so you see it with the map closed and after the line has gone.
+# Which drops get one is a choice of its own, apart from what is tracked above:
+# the menu's "Pillar" boxes. A drop can have a pillar without being tracked.
+# The game's HD graphics only; legacy graphics show none.
+#
+# The runes with a pillar: "all", "none", or their names, as for runes above.
+pillar_runes = "Vex Ohm Lo Sur Ber Jah Cham Zod"
+# The other rare drops, a group each:
+pillar_keys = false
+pillar_organs = false
+pillar_essences = false
+pillar_worldstone_shards = false
+pillar_statues = false
+pillar_fragments = false
 
 # The key that opens and closes the menu: F1 .. F12, INSERT, DELETE, HOME, END,
 # PAGEUP, PAGEDOWN, PAUSE, SCROLLLOCK, BACKQUOTE, MINUS, EQUALS.

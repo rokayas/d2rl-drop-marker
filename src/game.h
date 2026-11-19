@@ -109,6 +109,10 @@ bool has_projection();   // the above-head point, the graphics mode and the rend
 bool hd_graphics();      // false in legacy graphics
 bool render_size(int* w, int* h);  // what projected points are measured in
 bool project_above_head(Unit* u, float* x, float* y);  // where the game draws above the unit (render pixels)
+// A local addition (the light pillars): the game's projection itself, which the above-head helper calls - the unit's
+// point in render pixels, at its feet or (above_head) at the top of its bounds. The UI thread only.
+bool has_unit_projection();
+bool project_unit(Unit* u, bool above_head, float* x, float* y);
 bool has_hostility();
 bool is_hostile(Unit* me, Unit* other);  // the client's own rule: false for NPCs in town, pets, the mercenary
 int panel_side();  // 0 no side panel, 1 right (inventory, skills), 2 left (character, stash, ...), 3 both; -1 unknown

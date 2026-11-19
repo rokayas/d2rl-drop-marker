@@ -25,6 +25,7 @@
 #include "loot.h"
 #include "maploot.h"
 #include "mapmarks.h"
+#include "pillars.h"
 #include "remember.h"
 #include "sites.h"
 #include "terror.h"
@@ -478,8 +479,10 @@ void unlock_imgui() {
 // The health bars, and the lines said on screen (toast.h, a local addition): either makes a frame. Both calls come on
 // the present thread with the ImGui lock held, so what the first found about the bars is kept for the second.
 static bool g_bars_wanted = false;
+static bool g_pillars_wanted = false;  // the light pillars (pillars.h, a local addition): a frame of their own too
 bool hud_wanted() {
   if (!g_context_ready || pause_menu_open()) return false;
+  g_pillars_wanted = pillars::take_snapshot();
 #ifdef D2RCC_RUNES_ONLY
   g_bars_wanted = false;  // the runes-only build has no health bars
 #else
@@ -487,9 +490,10 @@ bool hud_wanted() {
 #endif
   chatline::overdue();  // a line for the chat the UI thread did not come for: on screen from here on
   const bool said = toast::any();
-  return g_bars_wanted || said;
+  return g_bars_wanted || said || g_pillars_wanted;
 }
 void draw_hud() {
+  if (g_pillars_wanted) pillars::draw();  // first: under the bars and the lines
 #ifndef D2RCC_RUNES_ONLY
   if (g_bars_wanted) healthbars::draw(g_hud_font);
 #endif
@@ -537,7 +541,7 @@ bool wants_draw() {
 // The runes-only build's menu (trackmenu.cpp, a local addition): what is tracked and where a tracked drop is said. Up
 // while its key has it up; a choice holds at once, and is written to the settings file (on_setting_changed).
 void draw_panel() {
-  const trackmenu::Result r = trackmenu::draw(g_scale, config::key_name(toggle_key()));
+  const trackmenu::Result r = trackmenu::draw(g_scale, config::key_name(toggle_key()), pillars::why_not());
   if (r.closed) set_forced(false);
   if (r.changed) changed("what is tracked", "changed");
 }

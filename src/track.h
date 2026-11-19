@@ -23,7 +23,7 @@ constexpr const char* kRuneNames[kRunes] = {"El",  "Eld", "Tir",   "Nef", "Eth",
 // --- the other items, in groups -------------------------------------------------------------------------------------
 enum Group : int { kKeys = 0, kOrgans, kEssences, kShards, kStatues, kFragments, kGroups };
 constexpr uint32_t kAllGroups = (1u << kGroups) - 1;
-// Tracked unless the settings say otherwise: all but the fragments (the user asked for the others by name).
+// Tracked unless the settings say otherwise: all but the fragments (a tick in the menu tracks those too).
 constexpr uint32_t kDefaultGroups = kAllGroups & ~(1u << kFragments);
 constexpr const char* kGroupNames[kGroups] = {"Keys", "Organs", "Essences", "Worldstone Shards", "Statues", "Fragments"};
 // The settings file's key of each group.
@@ -154,6 +154,19 @@ inline std::string runes_to_text(uint64_t mask) {
 // Rune n and every higher one.
 constexpr uint64_t runes_from(int n) { return n < 1 ? kAllRunes : n > kRunes ? 0 : kAllRunes & ~((1ull << (n - 1)) - 1); }
 
+// --- the light pillars ------------------------------------------------------------------------------------------------
+// A pillar of light stands on a drop while it lies on the ground (pillars.h). Which drops get one is a choice of its
+// own, a tick beside each rune and each group, apart from what is tracked: pillars on the high runes only, say, with
+// every rune tracked for the map and the messages - or a pillar on a drop that is not tracked at all.
+// Unless the settings say otherwise: Vex and every higher rune, and none of the groups.
+constexpr int kFirstPillarRune = 26;  // Vex
+constexpr uint64_t kDefaultPillarRunes = runes_from(kFirstPillarRune);
+constexpr uint32_t kDefaultPillarGroups = 0;
+// The settings file's keys: the runes as text ("all", "none" or names, as the tracked runes), a switch each group.
+constexpr const char* kPillarRunesKey = "pillar_runes";
+constexpr const char* kPillarGroupKeys[kGroups] = {"pillar_keys",              "pillar_organs",  "pillar_essences",
+                                                   "pillar_worldstone_shards", "pillar_statues", "pillar_fragments"};
+
 // --- the choices (track.cpp; any thread) ----------------------------------------------------------------------------
 void init(uint64_t runes, uint32_t groups, bool icons = true);  // from the settings, as the plugin loads
 // How a tracked drop is shown has three switches, any of them on or off: its icon on the minimap (here), and its line
@@ -167,5 +180,14 @@ void set_rune(int number, bool on);
 void set_runes(uint64_t mask);
 bool group(int g);
 void set_group(int g, bool on);
+// The pillars' own choices.
+void init_pillars(uint64_t runes, uint32_t groups);
+uint64_t pillar_runes();
+uint32_t pillar_groups();
+bool pillar_rune(int number);  // 1 .. 33; any other number: no pillar (the menu has no tick for it)
+void set_pillar_runes(uint64_t mask);
+bool pillar_group(int g);
+void set_pillar_group(int g, bool on);
+bool any_pillars();  // some rune or group has one
 
 }  // namespace d2rcc::track

@@ -1,6 +1,7 @@
 // The menu (src/trackmenu.cpp, a local addition), drawn and clicked without the game: Dear ImGui with no renderer, its
 // test hooks giving every item's place by its label, mouse events put in as a player's would come, and a small software
-// rasteriser writing what was drawn to BMP files to look at.
+// rasteriser writing what was drawn to BMP files to look at. The light pillar's look (src/pillarart.h) is painted to a
+// picture the same way, on a ground of its own.
 //
 // Built by hand (Dear ImGui compiled with its test hooks, so not one of `make test`'s):
 //   g++ -std=c++20 -O2 -DIMGUI_ENABLE_TEST_ENGINE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -Isrc -Icontrib/imgui -static
@@ -22,6 +23,7 @@
 #include "imgui_internal.h"
 
 #include "../src/chatline.h"
+#include "../src/pillarart.h"
 #include "../src/track.h"
 #include "../src/trackmenu.h"
 
@@ -63,6 +65,9 @@ namespace {
 constexpr float kScale = 1.6f;  // the overlay's at 1440 lines of screen
 int g_failed = 0;
 trackmenu::Result g_seen;  // what the menu answered since it was last asked (seen())
+const char* g_pillar_note = nullptr;  // what the overlay would say of the light pillars (pillars.h why_not)
+bool g_pillar_scene = false;          // the frame is a few light pillars and no menu
+double g_scene_seconds = 0.0;
 
 void check(bool ok, const char* what) {
   std::printf("  %s  %s\n", ok ? "ok  " : "FAIL", what);
@@ -73,7 +78,19 @@ void frame() {
   ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
   g_items.clear();
   ImGui::NewFrame();
-  const trackmenu::Result r = trackmenu::draw(kScale, "F7");
+  if (g_pillar_scene) {
+    // As pillars.cpp draws them: on the background list, a rune's and another drop's.
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    const float unit = size.y / 1080.0f, cx = size.x * 0.5f, cy = size.y * 0.5f;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    pillarart::beam(dl, cx - 330.0f, cy + 110.0f, unit, pillarart::kRuneColor, g_scene_seconds);
+    pillarart::beam(dl, cx - 110.0f, cy + 150.0f, unit, pillarart::kOtherColor, g_scene_seconds + 0.9);
+    pillarart::beam(dl, cx + 150.0f, cy + 90.0f, unit, pillarart::kRuneColor, g_scene_seconds + 1.5);
+    pillarart::beam(dl, cx + 380.0f, cy + 140.0f, unit, pillarart::kOtherColor, g_scene_seconds + 0.4);
+    ImGui::Render();
+    return;
+  }
+  const trackmenu::Result r = trackmenu::draw(kScale, "F7", g_pillar_note);
   g_seen.changed = g_seen.changed || r.changed;
   g_seen.closed = g_seen.closed || r.closed;
   ImGui::Render();
@@ -252,6 +269,41 @@ void shoot(const std::string& folder, const char* name) {
   std::printf("    picture %s (%d x %d)%s\n", path.c_str(), crop.w, crop.h, save_bmp(crop, path) ? "" : " NOT written");
 }
 
+// The light pillars as a picture: a piece of the screen around its middle, on a ground dark at the left (a dungeon's
+// floor), mid in the middle (grass, sand) and light at the right (snow), with some grain.
+void shoot_pillars(const std::string& folder, const char* name) {
+  if (folder.empty()) return;
+  const ImGuiIO& io = ImGui::GetIO();
+  const int w = 1100, h = 620;
+  const int x0 = static_cast<int>(io.DisplaySize.x * 0.5f) - w / 2, y0 = static_cast<int>(io.DisplaySize.y * 0.5f) - h * 2 / 3;
+  Canvas full;
+  full.w = static_cast<int>(io.DisplaySize.x);
+  full.h = static_cast<int>(io.DisplaySize.y);
+  full.rgb.assign(static_cast<size_t>(full.w) * static_cast<size_t>(full.h) * 3, 0);
+  uint32_t seed = 12345;
+  for (int y = y0; y < y0 + h; ++y)
+    for (int x = x0; x < x0 + w; ++x) {
+      seed = seed * 1664525u + 1013904223u;
+      const float t = static_cast<float>(x - x0) / static_cast<float>(w);
+      const float grain = static_cast<float>((seed >> 24) & 0x1F) - 16.0f;
+      const float base[3][3] = {{34, 30, 28}, {92, 96, 62}, {206, 212, 222}};
+      const int band = t < 0.34f ? 0 : t < 0.67f ? 1 : 2;
+      uint8_t* d = &full.rgb[(static_cast<size_t>(y) * static_cast<size_t>(full.w) + static_cast<size_t>(x)) * 3];
+      for (int k = 0; k < 3; ++k) d[k] = static_cast<uint8_t>(std::clamp(base[band][k] + grain, 0.0f, 255.0f));
+    }
+  paint(ImGui::GetDrawData(), &full);
+  Canvas crop;
+  crop.w = w;
+  crop.h = h;
+  crop.rgb.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 3);
+  for (int y = 0; y < h; ++y)
+    std::memcpy(&crop.rgb[static_cast<size_t>(y) * static_cast<size_t>(w) * 3],
+                &full.rgb[(static_cast<size_t>(y + y0) * static_cast<size_t>(full.w) + static_cast<size_t>(x0)) * 3],
+                static_cast<size_t>(w) * 3);
+  const std::string path = folder + "/" + name + ".bmp";
+  std::printf("    picture %s (%d x %d)%s\n", path.c_str(), w, h, save_bmp(crop, path) ? "" : " NOT written");
+}
+
 ImGuiWindow* menu() { return ImGui::FindWindowByName(trackmenu::kTitle); }
 // An item of the menu that tells the hooks no label (a combo box, the close box): by its id in the window.
 bool click_id(const char* str_id) {
@@ -298,6 +350,7 @@ int main(int argc, char** argv) {
   ImGui::GetCurrentContext()->TestEngineHookItems = true;
 
   track::init(track::kAllRunes, track::kDefaultGroups);
+  track::init_pillars(track::kDefaultPillarRunes, track::kDefaultPillarGroups);
   io.AddMousePosEvent(5.0f, 5.0f);
   for (int i = 0; i < 4; ++i) frame();  // a window that sizes itself is hidden for its first frames
   seen();
@@ -319,6 +372,19 @@ int main(int argc, char** argv) {
   for (int g = 0; g < track::kGroups; ++g) groups += find(track::kGroupNames[g], &bb) ? 1 : 0;
   check(runes == track::kRunes, "a checkbox for each of the 33 runes");
   check(groups == track::kGroups, "a checkbox for each group of the other drops");
+  int rune_pillars = 0, group_pillars = 0;
+  for (int n = 0; n < track::kRunes; ++n)
+    rune_pillars += find((std::string("##pillar_") + track::kRuneNames[n]).c_str(), &bb) ? 1 : 0;
+  for (int g = 0; g < track::kGroups; ++g)
+    group_pillars += find((std::string("##pillar_") + track::kGroupKeys[g]).c_str(), &bb) ? 1 : 0;
+  check(rune_pillars == track::kRunes && group_pillars == track::kGroups,
+        "... and beside each of them a second box, its light pillar's");
+  {
+    ImRect ber, ber_pillar, jah;
+    const bool ok = find("Ber", &ber) && find("##pillar_Ber", &ber_pillar) && find("Jah", &jah);
+    check(ok && ber_pillar.Min.y == ber.Min.y && ber_pillar.Min.x > ber.Max.x - 1.0f && jah.Min.y > ber.Min.y,
+          "a rune's pillar box stands in its row, to the right of its name");
+  }
   {
     ImRect el, sol, mal, amn;
     const bool ok = find("El", &el) && find("Sol", &sol) && find("Mal", &mal) && find("Amn", &amn);
@@ -330,21 +396,22 @@ int main(int argc, char** argv) {
   shoot(folder, "1-as-it-comes-up");
 
   std::printf("2. the runes\n");
-  check(click("None") && track::runes() == 0 && seen().changed, "\"None\" clears them all, and says so");
+  check(click("None##track") && track::runes() == 0 && seen().changed, "\"None\" clears them all, and says so");
   check(click("Ber") && track::runes() == (1ull << 29) && seen().changed, "a click on Ber's box tracks Ber alone");
   check(click("Jah") && click("Zod") && track::rune(31) && track::rune(33) && !track::rune(32), "Jah and Zod too, not Cham");
   check(click("Ber") && !track::rune(30) && track::rune(31), "a second click on Ber's box lets Ber go");
   seen();
-  check(click("All") && track::runes() == track::kAllRunes && seen().changed, "\"All\" tracks them all");
+  check(click("All##track") && track::runes() == track::kAllRunes && seen().changed, "\"All\" tracks them all");
+  check(track::pillar_runes() == track::kDefaultPillarRunes, "none of that touched the light pillars");
   frame();
   check(!seen().changed, "a frame with no click changes nothing");
 
   std::printf("3. \"from a rune up\"\n");
-  check(click_id("##from") && open_popup() != nullptr, "a click opens the list");
+  check(click_id("##from_track") && open_popup() != nullptr, "a click opens the list");
   shoot(folder, "2-the-list-open");
-  check(click("Tir and every higher rune") && track::runes() == track::runes_from(3) && open_popup() == nullptr,
+  check(click("Tir and every higher rune##track") && track::runes() == track::runes_from(3) && open_popup() == nullptr,
         "an entry in sight: Tir and higher, and the list closes");
-  check(click_id("##from") && open_popup() != nullptr, "the list again");
+  check(click_id("##from_track") && open_popup() != nullptr, "the list again");
   {
     // An entry out of sight: the wheel, over the list, until it is in it.
     const ImGuiWindow* pop = open_popup();
@@ -356,14 +423,14 @@ int main(int argc, char** argv) {
     }
     for (int i = 0; i < 60 && !in_sight && pop; ++i) {
       pop = open_popup();
-      in_sight = pop && find("Ist and every higher rune", &entry) && pop->InnerClipRect.Contains(entry.GetCenter());
+      in_sight = pop && find("Ist and every higher rune##track", &entry) && pop->InnerClipRect.Contains(entry.GetCenter());
       if (in_sight) break;
       io.AddMouseWheelEvent(0.0f, -1.0f);
       frame();
       frame();
     }
     check(in_sight, "the wheel brings \"Ist and every higher rune\" into sight");
-    check(click("Ist and every higher rune") && track::runes() == track::runes_from(24) && !track::rune(23) && track::rune(24),
+    check(click("Ist and every higher rune##track") && track::runes() == track::runes_from(24) && !track::rune(23) && track::rune(24),
           "... and a click on it tracks Ist and higher");
   }
   seen();
@@ -373,6 +440,56 @@ int main(int argc, char** argv) {
   check(click("Fragments") && track::group(track::kFragments) && seen().changed, "Fragments on");
   check(click("Essences") && !track::group(track::kEssences) && track::group(track::kKeys), "Essences off, Keys as they were");
   seen();
+
+  std::printf("4b. the light pillars: a box of its own beside each rune and each group\n");
+  check(track::pillar_runes() == track::runes_from(26) && track::pillar_groups() == 0,
+        "as it comes up: a pillar on Vex and every higher rune, on no group");
+  check(click("##pillar_Ber") && !track::pillar_rune(30) && track::pillar_rune(31) && track::rune(30) && seen().changed,
+        "a click on Ber's pillar box takes Ber's pillar away; Ber stays tracked");
+  check(click("##pillar_El") && track::pillar_rune(1) && !track::rune(1), "El gets a pillar without being tracked");
+  check(click("None##pillar") && track::pillar_runes() == 0 && track::runes() == track::runes_from(24) && seen().changed,
+        "the pillars' \"None\" clears the pillars, and only them");
+  check(click("##pillar_Zod") && track::pillar_runes() == (1ull << 32), "Zod alone");
+  check(click("All##pillar") && track::pillar_runes() == track::kAllRunes && track::runes() == track::runes_from(24),
+        "the pillars' \"All\"");
+  check(click_id("##from_pillar") && open_popup() != nullptr, "the pillars' own \"from a rune up\" list opens");
+  {
+    const ImGuiWindow* pop = open_popup();
+    bool in_sight = false;
+    ImRect entry;
+    if (pop) {
+      io.AddMousePosEvent(pop->Rect().GetCenter().x, pop->Rect().GetCenter().y);
+      frame();
+    }
+    for (int i = 0; i < 60 && !in_sight && pop; ++i) {
+      pop = open_popup();
+      in_sight = pop && find("Sur and every higher rune##pillar", &entry) && pop->InnerClipRect.Contains(entry.GetCenter());
+      if (in_sight) break;
+      io.AddMouseWheelEvent(0.0f, -1.0f);
+      frame();
+      frame();
+    }
+    check(in_sight && click("Sur and every higher rune##pillar") && track::pillar_runes() == track::runes_from(29) &&
+              track::runes() == track::runes_from(24) && open_popup() == nullptr,
+          "\"Sur and every higher rune\": pillars on Sur .. Zod, what is tracked as it was");
+  }
+  check(click("##pillar_keys") && track::pillar_group(track::kKeys) && track::group(track::kKeys) &&
+            !track::pillar_group(track::kOrgans) && seen().changed,
+        "a pillar on the keys");
+  check(click("##pillar_fragments") && click("Fragments") && track::pillar_group(track::kFragments) &&
+            !track::group(track::kFragments),
+        "a pillar on the fragments, which are then taken off the tracked ones: the pillar stays");
+  check(click("Fragments") && track::group(track::kFragments), "(the fragments tracked again)");
+  seen();
+  shoot(folder, "7-pillars-chosen");
+  g_pillar_note = "not shown in legacy graphics";
+  frame();
+  frame();
+  shoot(folder, "8-no-pillars-now");
+  g_pillar_note = nullptr;
+  frame();
+  frame();
+  check(!seen().changed, "the note under the list changes nothing");
 
   std::printf("5. how a tracked drop is shown: three switches\n");
   {
@@ -408,8 +525,25 @@ int main(int argc, char** argv) {
   check(click_id("#CLOSE"), "the window has a close box");
   check(seen().closed, "a click on it says \"closed\"");
   check(track::runes() == track::runes_from(24) && track::group(track::kFragments) && !track::group(track::kEssences) &&
-            track::icons() && g_mode == chatline::kChat,
+            track::icons() && g_mode == chatline::kChat && track::pillar_runes() == track::runes_from(29) &&
+            track::pillar_group(track::kKeys) && track::pillar_group(track::kFragments),
         "the choices stand as they were made");
+
+  std::printf("7. the light pillar's look\n");
+  g_pillar_scene = true;
+  bool drawn = true;
+  for (int i = 0; i < 3; ++i) {
+    g_scene_seconds = 0.3 + 0.6 * i;
+    frame();
+    drawn = drawn && ImGui::GetDrawData()->TotalVtxCount > 500;
+    char name[32];
+    std::snprintf(name, sizeof(name), "9-light-pillars-%d", i + 1);
+    shoot_pillars(folder, name);
+  }
+  check(drawn, "four pillars make a frame's worth of triangles");
+  check(pillarart::height_alpha(0.0f) == 1.0f && pillarart::height_alpha(1.0f) == 0.0f &&
+            pillarart::height_alpha(0.5f) < pillarart::height_alpha(0.25f) && pillarart::height_alpha(0.5f) > 0.2f,
+        "a beam is brightest at its foot and fades out to its top");
 
   ImGui::DestroyContext();
   std::printf("%s (%d failed)\n", g_failed ? "FAILED" : "all passed", g_failed);

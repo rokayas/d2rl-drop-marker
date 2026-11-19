@@ -2,7 +2,8 @@
 
 // The runes-only build's menu (a local addition, not CabbyCodes' own): what is tracked - which runes, which of the
 // other rare drops (track.h) - and how a tracked drop is shown: its icon on the minimap, its line in the chat, its
-// pop-up on screen, each a switch of its own (track.h, chatline.h). Dear ImGui, drawn by the overlay while
+// pop-up on screen, each a switch of its own (track.h, chatline.h) - and which drops get a pillar of light on the
+// ground, a second tick beside each rune and each group (track.h, pillars.h). Dear ImGui, drawn by the overlay while
 // the menu's key has it up. On its own here, with nothing of the overlay or the game in it, so that
 // tests/test_trackmenu.cpp can draw it and click it without the game.
 namespace d2rcc::trackmenu {
@@ -15,7 +16,8 @@ struct Result {
 };
 
 // Between ImGui::NewFrame() and ImGui::Render(). `scale`: the overlay's style scale (1 at 900 lines of screen);
-// `key`: the name of the key that takes the menu down, for its last line.
-Result draw(float scale, const char* key);
+// `key`: the name of the key that takes the menu down, for its last line; `pillar_note`: why no light pillar can be
+// shown now (pillars.h why_not), said under the list, or null.
+Result draw(float scale, const char* key, const char* pillar_note = nullptr);
 
 }  // namespace d2rcc::trackmenu

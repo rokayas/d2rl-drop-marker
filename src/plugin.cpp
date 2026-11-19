@@ -46,6 +46,7 @@
 #include "hometown.h"
 #include "npcservice.h"
 #include "passive.h"
+#include "pillars.h"
 #include "requirements.h"
 #include "revive.h"
 #include "version.h"
@@ -165,6 +166,8 @@ void read_settings() {
   lean.track_runes = g_settings.track_runes;
   lean.track_groups = g_settings.track_groups;
   lean.map_icons = g_settings.map_icons;
+  lean.pillar_runes = g_settings.pillar_runes;
+  lean.pillar_groups = g_settings.pillar_groups;
   lean.toggle_key = g_settings.toggle_key;  // the menu's key (menu_key in the file)
   lean.logging = g_settings.logging;
   lean.log_level = g_settings.log_level;
@@ -190,6 +193,13 @@ void log_settings() {
        g_settings.greeting, config::key_name(g_settings.toggle_key), g_settings.logging,
        config::log_level_name(g_settings.log_level), g_settings.trace,
        track::runes_to_text(g_settings.track_runes).c_str(), groups[0] ? groups : "none");
+  char lit[160] = "";
+  at = 0;
+  for (int g = 0; g < track::kGroups && at < sizeof(lit); ++g)
+    if ((g_settings.pillar_groups >> g) & 1)
+      at += static_cast<size_t>(std::snprintf(lit + at, sizeof(lit) - at, "%s%s", at ? ", " : "", track::kGroupNames[g]));
+  logf("settings: a light pillar on the runes: %s; on the other drops: %s",
+       track::runes_to_text(g_settings.pillar_runes).c_str(), lit[0] ? lit : "none");
 }
 #else
 void log_settings() {
@@ -265,12 +275,16 @@ void save_settings() {
   g_settings.track_runes = track::runes();
   g_settings.track_groups = track::groups();
   g_settings.map_icons = track::icons();
+  g_settings.pillar_runes = track::pillar_runes();
+  g_settings.pillar_groups = track::pillar_groups();
   g_settings.rune_message = chatline::mode();
   const std::string text = config::rewrite(read_config_text(), g_settings);
   if (ctx->WriteConfig(text.c_str()))
-    logf("settings: written (%zu bytes); shown as: minimap icon=%d, chat line=%d, pop-up=%d; runes tracked: %s",
+    logf("settings: written (%zu bytes); shown as: minimap icon=%d, chat line=%d, pop-up=%d; runes tracked: %s; runes "
+         "with a light pillar: %s",
          text.size(), g_settings.map_icons, (g_settings.rune_message & chatline::kChat) != 0,
-         (g_settings.rune_message & chatline::kScreen) != 0, track::runes_to_text(g_settings.track_runes).c_str());
+         (g_settings.rune_message & chatline::kScreen) != 0, track::runes_to_text(g_settings.track_runes).c_str(),
+         track::runes_to_text(g_settings.pillar_runes).c_str());
   else
     log_warn("settings: the loader refused to write the file - the menu's choices hold until the game is closed");
 }
@@ -377,6 +391,9 @@ void __cdecl ui_pump(const D2RL::PluginContext* ctx, void*) noexcept {
 #endif
     maploot::on_ui(now);  // the map's item icons loaded by the game's sprite loader, once
     chatline::on_ui();    // the lines that wait for the game's chat (a local addition)
+#ifdef D2RCC_RUNES_ONLY
+    pillars::collect(now);  // where the light pillars stand in this frame (a local addition)
+#endif
 #ifndef D2RCC_RUNES_ONLY
     remember::on_ui(now);
 #endif
@@ -542,6 +559,7 @@ DWORD WINAPI worker(void*) {
   remember::bind(g_threads != nullptr);
 #endif
   chatline::bind();  // the loader's routine for a line in the game's chat (a local addition)
+  pillars::bind(g_threads != nullptr);  // the game's own unit-to-screen routine, for the light pillars
   g_bound = true;
 #ifdef D2RCC_DEV
   {
@@ -603,7 +621,9 @@ void __cdecl on_gameplay_event(const D2RL::PluginContext*, const D2RL::Lifecycle
     game::clear_local_player();
     game::set_current_level(-1);
     cheats::publish(cheats::Status{});
+    overlay::set_pause_open(false);
     maploot::game_left();
+    pillars::game_left();
     roomfill::game_left();
   }
 #else
@@ -773,6 +793,30 @@ D2RL::SharedEvents::UiMessageAction __cdecl on_ui_message(const D2RL::PluginCont
   return D2RL::SharedEvents::UiMessageAction::Continue;
 }
 
+#ifdef D2RCC_RUNES_ONLY
+// The runes-only build listens to the game's UI messages for one thing (a local addition): the pause menu coming and
+// going, as CabbyCodes follows it above, so that the light pillars and the pop-ups are not drawn over it (overlay.cpp
+// hud_wanted). Nothing else of a message is looked at, and every message goes on to the game as it came.
+D2RL::SharedEvents::UiMessageAction __cdecl on_ui_message_lean(const D2RL::PluginContext*,
+                                                               const D2RL::SharedEvents::UiMessageEvent* e,
+                                                               void*) noexcept {
+  using Action = D2RL::SharedEvents::UiMessageAction;
+  if (!e || e->structSize < D2RL::SharedEvents::UiMessageEventRequiredSize) return Action::Continue;
+  const char* target = e->target ? e->target : "";
+  if (target[0] != 'P' && target[0] != 'F') return Action::Continue;
+  const char* command = e->command ? e->command : "";
+  if (same_str(target, "PanelManager")) {
+    if (same_str(e->text ? e->text : "", "PauseLayoutGarden")) {
+      if (same_str(command, "OpenPanel")) overlay::set_pause_open(true);
+      else if (same_str(command, "ClosePanel") || same_str(command, "UnloadPanel")) overlay::set_pause_open(false);
+    }
+  } else if (same_str(target, "PausePanelMessage") || same_str(target, "FrontEndNavigation")) {
+    overlay::set_pause_open(false);
+  }
+  return Action::Continue;
+}
+#endif
+
 void register_ui_messages(const D2RL::PluginContext* ctx) {
   if (ctx->QueryService(&g_shared) != D2RL::ServiceQueryResult::Success ||
       !D2RL::HasSharedEventServiceField(g_shared, D2RL::SharedEventServiceRequiredSize) ||
@@ -786,7 +830,11 @@ void register_ui_messages(const D2RL::PluginContext* ctx) {
       .flags = 0,
       .priority = 0,
       .reserved = 0,
+#ifdef D2RCC_RUNES_ONLY
+      .callback = on_ui_message_lean,
+#else
       .callback = on_ui_message,
+#endif
       .userData = nullptr,
   };
   if (g_shared->registerUiMessageListener(ctx, &listener, &g_ui_listener) != D2RL::SharedEvents::Result::Success)
@@ -1433,6 +1481,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* ctx) noex
   cheats::init(g_settings);
   chatline::set_mode(g_settings.rune_message);
   track::init(g_settings.track_runes, g_settings.track_groups, g_settings.map_icons);
+  track::init_pillars(g_settings.pillar_runes, g_settings.pillar_groups);
 #ifdef D2RCC_RUNES_ONLY
   if (!g_settings.enabled) {
     logf("settings: enabled = false - the plugin stays idle (nothing of the game is hooked)");
@@ -1441,8 +1490,10 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* ctx) noex
   // From here on the game's threads hand their log lines to a writer thread (with trace = true they write
   // them themselves, as they are made).
   log_start(g_settings.trace);
-  // No console command, and no listener for the game's UI messages: the menu comes up by its key alone.
+  // No console command: the menu comes up by its key alone. The game's UI messages are listened to for the pause menu
+  // only (on_ui_message_lean).
   register_lifecycle(ctx);
+  register_ui_messages(ctx);
   start_pump();
 #else
   remember::init(g_settings);

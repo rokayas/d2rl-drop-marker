@@ -173,6 +173,9 @@ std::string value_of(const Settings& s, const std::string& key) {
   if (key == "runes") return std::string("\"") + track::runes_to_text(s.track_runes) + "\"";
   for (int g = 0; g < track::kGroups; ++g)
     if (key == track::kGroupKeys[g]) return (s.track_groups >> g) & 1 ? "true" : "false";
+  if (key == track::kPillarRunesKey) return std::string("\"") + track::runes_to_text(s.pillar_runes) + "\"";
+  for (int g = 0; g < track::kGroups; ++g)
+    if (key == track::kPillarGroupKeys[g]) return (s.pillar_groups >> g) & 1 ? "true" : "false";
   return "";
 }
 
@@ -182,6 +185,8 @@ std::string value_of(const Settings& s, const std::string& key) {
 constexpr const char* kTableName = "rune-marker";
 const char* const kOrder[] = {"enabled",  "map_runes", "runes",        "keys",     "organs",   "essences",
                               "worldstone_shards", "statues", "fragments", "map_icons", "rune_message", "greeting",
+                              "pillar_runes", "pillar_keys", "pillar_organs", "pillar_essences",
+                              "pillar_worldstone_shards", "pillar_statues", "pillar_fragments",
                               "menu_key", "logging",  "log_level"};
 // What a key added to an older file says of itself (the shipped file has a comment above each).
 const char* added_comment(const char* key) {
@@ -190,6 +195,10 @@ const char* added_comment(const char* key) {
   if (!std::strcmp(key, "menu_key")) return "   # the key that opens and closes the menu";
   for (int g = 0; g < track::kGroups; ++g)
     if (!std::strcmp(key, track::kGroupKeys[g])) return "   # tracked: this group of the other rare drops";
+  if (!std::strcmp(key, track::kPillarRunesKey))
+    return "   # the runes with a pillar of light on the ground: \"all\", \"none\" or their names";
+  for (int g = 0; g < track::kGroups; ++g)
+    if (!std::strcmp(key, track::kPillarGroupKeys[g])) return "   # a pillar of light on this group's drops";
   return "";
 }
 #else
@@ -375,6 +384,20 @@ bool set_from(Settings* s, const std::string& key, const std::string& raw) {
     bool on = false;
     if (!parse_bool(v, &on)) return false;
     s->track_groups = on ? s->track_groups | (1u << g) : s->track_groups & ~(1u << g);
+    return true;
+  }
+  // ... and which drops get a pillar of light (track.h): the runes as the tracked runes are written, a switch a group.
+  if (key == track::kPillarRunesKey) {
+    uint64_t mask = 0;
+    if (!track::runes_from_text(unquote(v), &mask)) return false;
+    s->pillar_runes = mask;
+    return true;
+  }
+  for (int g = 0; g < track::kGroups; ++g) {
+    if (key != track::kPillarGroupKeys[g]) continue;
+    bool on = false;
+    if (!parse_bool(v, &on)) return false;
+    s->pillar_groups = on ? s->pillar_groups | (1u << g) : s->pillar_groups & ~(1u << g);
     return true;
   }
   if (key == "logging") return parse_bool(v, &s->logging);

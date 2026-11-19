@@ -338,6 +338,10 @@ enum Derived : int {
   // object's destination the town end maker calls (D2RCore's).
   dPortalPair,
   dSetObjectDest,        // (object, u16 level)
+  // The light pillars (a local addition): the two calls of the above-head helper (kProjectAboveHead) - the getter of
+  // the root whose +0x20 is the renderer's context, and the projection it hands that context and the unit to.
+  dRenderContextRoot,    // () -> the root (the context is its +0x20, null while nothing is rendered)
+  dProjectUnit,          // (context, unit, float2* out, bool above_head) -> al: the unit's point in render pixels
   dCount
 };
 

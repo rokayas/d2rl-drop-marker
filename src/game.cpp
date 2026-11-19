@@ -19,6 +19,10 @@ using IsOnlineFn = bool(__fastcall*)() noexcept;
 // (unit, float2 offset packed x | y << 32) -> the rounded point x | y << 32, or -1 when the unit is not drawn.
 using AboveHeadFn = uint64_t(__fastcall*)(Unit* unit, uint64_t offset) noexcept;
 using IsHdFn = bool(__fastcall*)() noexcept;
+// The light pillars (a local addition): the root whose +0x20 is the renderer's context, and the projection the
+// above-head helper hands it to - (context, unit, float2* out, above_head) -> al, the point in render pixels.
+using ContextRootFn = void*(__fastcall*)() noexcept;
+using ProjectUnitFn = bool(__fastcall*)(void* context, Unit* unit, float* out, uint8_t above_head) noexcept;
 using DimensionFn = int32_t(__fastcall*)() noexcept;
 using IsHostileFn = int32_t(__fastcall*)(Unit* unit, Unit* other, int32_t unused) noexcept;
 using GetRoomFn = void*(__fastcall*)(Unit* unit) noexcept;
@@ -126,6 +130,8 @@ LookupFn g_server_lookup = nullptr;
 LookupFn g_client_lookup = nullptr;
 IsOnlineFn g_is_online = nullptr;
 AboveHeadFn g_above_head = nullptr;
+ContextRootFn g_context_root = nullptr;
+ProjectUnitFn g_project_unit = nullptr;
 IsHdFn g_is_hd = nullptr;
 DimensionFn g_render_w = nullptr;
 DimensionFn g_render_h = nullptr;
@@ -374,6 +380,8 @@ bool bind() {
   g_client_lookup = reinterpret_cast<LookupFn>(sites::derived(sites::dClientGetUnit));
   g_is_online = at<IsOnlineFn>(sites::kIsOnlineState);
   g_above_head = at<AboveHeadFn>(sites::kProjectAboveHead);
+  g_context_root = reinterpret_cast<ContextRootFn>(sites::derived(sites::dRenderContextRoot));
+  g_project_unit = reinterpret_cast<ProjectUnitFn>(sites::derived(sites::dProjectUnit));
   g_is_hd = at<IsHdFn>(sites::kIsHdGraphics);
   g_render_w = at<DimensionFn>(sites::kRenderWidth);
   g_render_h = at<DimensionFn>(sites::kRenderHeight);
@@ -459,8 +467,9 @@ bool bind() {
   logf("game: stat helpers %s (base getter %s), unit lookups %s/%s, online check %s", g_get && g_set ? "bound" : "MISSING",
        g_get_base ? "bound" : "missing", g_server_lookup ? "server" : "-", g_client_lookup ? "client" : "-",
        g_is_online ? "bound" : "MISSING");
-  logf("game: above-head point %s, graphics mode %s, render size %s, hostility %s, client unit list %s",
-       g_above_head ? "bound" : "MISSING", g_is_hd ? "bound" : "MISSING", g_render_w && g_render_h ? "bound" : "MISSING",
+  logf("game: above-head point %s (the projection under it %s), graphics mode %s, render size %s, hostility %s, client unit list %s",
+       g_above_head ? "bound" : "MISSING", g_context_root && g_project_unit ? "bound" : "MISSING", g_is_hd ? "bound" : "MISSING",
+       g_render_w && g_render_h ? "bound" : "MISSING",
        g_is_hostile ? "bound" : "MISSING", has_client_units() ? "known" : "MISSING");
   logf("game: ground item removal %s, loot filter %s, affix picker and slots %s, affix table, fit test and apply %s",
        has_item_removal() ? "bound" : "MISSING", has_loot_filter() ? "bound" : "MISSING",
@@ -668,6 +677,22 @@ bool project_above_head(Unit* u, float* x, float* y) {
   if (r == ~0ull) return false;
   *x = static_cast<float>(static_cast<int32_t>(r & 0xFFFFFFFFu));
   *y = static_cast<float>(static_cast<int32_t>(r >> 32));
+  return true;
+}
+
+// A local addition (the light pillars). The renderer's context is asked for at every call, as the game's helper does:
+// it is null while nothing is rendered. `out` has room to spare (the helper's own is two floats in its caller's frame).
+bool has_unit_projection() { return g_context_root && g_project_unit && g_is_hd && g_render_w && g_render_h; }
+bool project_unit(Unit* u, bool above_head, float* x, float* y) {
+  if (!g_context_root || !g_project_unit || !u) return false;
+  const uintptr_t root = reinterpret_cast<uintptr_t>(g_context_root());
+  uintptr_t context = 0;
+  if (!root || !mem::read_safe(root + 0x20, &context) || !context) return false;
+  alignas(16) float out[4] = {};
+  if (!g_project_unit(reinterpret_cast<void*>(context), u, out, above_head ? 1 : 0)) return false;
+  if (!(out[0] == out[0]) || !(out[1] == out[1])) return false;  // not a number
+  *x = out[0];
+  *y = out[1];
   return true;
 }
 

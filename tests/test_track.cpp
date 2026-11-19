@@ -110,12 +110,42 @@ int main(int argc, char** argv) {
   track::init(track::kAllRunes, track::kDefaultGroups, false);
   check(!track::icons(), "... and off from the settings");
   track::set_icons(true);
+  // The light pillars: a choice of their own, beside what is tracked.
+  check(track::pillar_runes() == track::runes_from(26) && track::pillar_groups() == 0 && track::any_pillars(),
+        "a light pillar on Vex and every higher rune and on no group, unless said otherwise");
+  check(!track::pillar_rune(25) && track::pillar_rune(26) && track::pillar_rune(33) && !track::pillar_rune(0) &&
+            !track::pillar_rune(40),
+        "... Gul has none, Vex and Zod have one; a number that is no stock rune has none");
+  track::set_runes(0);
+  check(track::pillar_rune(30) && !track::rune(30), "a rune can have its pillar without being tracked");
+  track::set_pillar_runes(track::runes_from(30) | 1ull);
+  track::set_pillar_group(track::kKeys, true);
+  track::set_group(track::kKeys, false);
+  check(track::pillar_rune(1) && !track::pillar_rune(29) && track::pillar_rune(30) && track::pillar_group(track::kKeys) &&
+            !track::pillar_group(track::kOrgans) && !track::pillar_group(-1) && !track::pillar_group(99) &&
+            !track::group(track::kKeys),
+        "pillars set by rune and by group, apart from what is tracked");
+  track::set_pillar_runes(0);
+  track::set_pillar_group(track::kKeys, false);
+  check(!track::any_pillars(), "none chosen: no pillars at all");
+  track::init_pillars(track::kDefaultPillarRunes, track::kDefaultPillarGroups);
+  track::init(track::kAllRunes, track::kDefaultGroups);
 
   std::printf("4. the settings file\n");
   config::Settings s;
   check(config::parse("", &s) == 0 && s.track_runes == track::kAllRunes && s.track_groups == track::kDefaultGroups &&
-            s.toggle_key == 0x76 && s.map_runes && s.map_icons && s.rune_message == 1,
-        "an empty file: everything tracked but the fragments, shown as an icon and a chat line, the menu on F7");
+            s.toggle_key == 0x76 && s.map_runes && s.map_icons && s.rune_message == 1 &&
+            s.pillar_runes == track::kDefaultPillarRunes && s.pillar_groups == track::kDefaultPillarGroups,
+        "an empty file: everything tracked but the fragments, shown as an icon and a chat line, the menu on F7, a "
+        "light pillar on Vex and higher");
+  check(config::parse("[rune-marker]\npillar_runes = \"Ber Jah\"\npillar_keys = true\npillar_statues = true\n", &s) == 3 &&
+            s.pillar_runes == ((1ull << 29) | (1ull << 30)) &&
+            s.pillar_groups == ((1u << track::kKeys) | (1u << track::kStatues)) && s.track_runes == track::kAllRunes,
+        "the pillars' keys: the runes by name, a switch a group; what is tracked is not touched");
+  check(config::parse("[rune-marker]\npillar_runes = \"none\"\n", &s) == 1 && s.pillar_runes == 0 &&
+            config::parse("[rune-marker]\npillar_runes = \"Ber Bur\"\npillar_keys = perhaps\n", &s) == 0 &&
+            s.pillar_runes == track::kDefaultPillarRunes && s.pillar_groups == 0,
+        "\"none\"; and values that make no sense keep the defaults");
   const char* hand = "[rune-marker]\nrunes = \"Vex Ohm Lo Sur Ber Jah Cham Zod\"\nkeys = false\nfragments = true\n"
                      "menu_key = \"F9\"\nrune_message = \"screen\"\n";
   check(config::parse(hand, &s) == 5 && s.track_runes == track::runes_from(26) &&
@@ -139,9 +169,10 @@ int main(int argc, char** argv) {
     config::Settings d;
     const int keys = config::parse(shipped, &d);
     std::printf("    %s: %d keys\n", argv[1], keys);
-    check(keys == 15, "the shipped file has the 15 keys, all understood");
+    check(keys == 22, "the shipped file has the 22 keys, all understood");
     check(d.enabled && d.map_runes && d.track_runes == track::kAllRunes && d.track_groups == track::kDefaultGroups &&
-              d.map_icons && d.rune_message == 1 && d.greeting && d.toggle_key == 0x76 && d.logging,
+              d.map_icons && d.rune_message == 1 && d.greeting && d.toggle_key == 0x76 && d.logging &&
+              d.pillar_runes == track::kDefaultPillarRunes && d.pillar_groups == track::kDefaultPillarGroups,
           "... and says what the defaults are");
     check(config::rewrite(shipped, d) == shipped, "written back unchanged, it is the same file byte for byte");
     // The menu's choices written into it: only those lines change.
@@ -150,17 +181,23 @@ int main(int argc, char** argv) {
     c.track_groups = (c.track_groups | (1u << track::kFragments)) & ~(1u << track::kEssences);
     c.rune_message = 3;
     c.map_icons = false;
+    c.pillar_runes = track::runes_from(30);
+    c.pillar_groups = 1u << track::kOrgans;
     const std::string after = config::rewrite(shipped, c);
     config::Settings back;
     config::parse(after, &back);
     check(back.track_runes == c.track_runes && back.track_groups == c.track_groups && back.rune_message == 3 &&
-              !back.map_icons && back.toggle_key == d.toggle_key && back.greeting == d.greeting,
+              !back.map_icons && back.toggle_key == d.toggle_key && back.greeting == d.greeting &&
+              back.pillar_runes == c.pillar_runes && back.pillar_groups == c.pillar_groups,
           "the menu's choices are read back from the rewritten file");
     check(after.find("runes = \"Pul Um Mal Ist Gul Vex Ohm Lo Sur Ber Jah Cham Zod\"") != std::string::npos &&
               after.find("essences = false             # Twisted") != std::string::npos &&
               after.find("fragments = true           # Defender's Fire") != std::string::npos &&
               after.find("\nmap_icons = false\n") != std::string::npos &&
-              after.find("rune_message = \"both\"") != std::string::npos,
+              after.find("rune_message = \"both\"") != std::string::npos &&
+              after.find("\npillar_runes = \"Ber Jah Cham Zod\"\n") != std::string::npos &&
+              after.find("\npillar_organs = true\n") != std::string::npos &&
+              after.find("\npillar_keys = false\n") != std::string::npos,
           "the changed lines read as expected, their comments kept");
     int changed = 0;
     {
@@ -168,7 +205,7 @@ int main(int argc, char** argv) {
       std::string la, lb;
       while (std::getline(a, la) && std::getline(b, lb)) changed += la != lb;
     }
-    check(changed == 5, "exactly five lines differ from the shipped file");
+    check(changed == 7, "exactly seven lines differ from the shipped file");
     // Each of the four ways a line can be said, written and read back.
     bool modes = true;
     for (int mode = 0; mode <= 3; ++mode) {
@@ -187,7 +224,10 @@ int main(int argc, char** argv) {
     check(grown.rfind("# mine\n[rune-marker]\nenabled = true\n", 0) == 0 && g.track_runes == c.track_runes &&
               g.track_groups == c.track_groups && g.rune_message == 3 && !g.map_icons &&
               grown.find("menu_key = \"F7\"") != std::string::npos &&
-              grown.find("map_icons = false   # an icon on the minimap") != std::string::npos,
+              grown.find("map_icons = false   # an icon on the minimap") != std::string::npos &&
+              g.pillar_runes == c.pillar_runes && g.pillar_groups == c.pillar_groups &&
+              grown.find("pillar_runes = \"Ber Jah Cham Zod\"   # the runes with a pillar of light") != std::string::npos &&
+              grown.find("pillar_organs = true   # a pillar of light on this group") != std::string::npos,
           "an older file gains the new keys, each with a word on what it is, and keeps what it had");
     check(config::rewrite(grown, g) == grown, "... and is then left as it is");
   }

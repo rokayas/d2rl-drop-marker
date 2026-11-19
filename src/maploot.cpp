@@ -878,6 +878,22 @@ ItemKind ground_item_kind(Unit* item) {
   return kind_of_item(t, cls, game::item_quality(item));
 }
 
+ItemKind ground_drop(Unit* item, int* rune_number, int* group) {
+  *rune_number = 0;
+  *group = -1;
+  if (!item || !on_ground(game::unit_mode(item)) || game::unit_type(item) != game::kItem) return kItemNone;
+  const Tables* t = tables_of(game::unit_table_bank(item));
+  const uint32_t cls = game::unit_class(item);
+  if (!t || cls >= t->items) return kItemNone;
+  if (const int at = t->special[cls]) {
+    *group = track::kSpecials[at - 1].group;
+    return kItemSpecial;
+  }
+  if (!t->rune[cls]) return kItemNone;
+  *rune_number = t->rune_no[cls];
+  return kItemRune;
+}
+
 int items_found(uint8_t bank, int level, const ServerItem* items, size_t count,
                 const std::vector<mapmarks::RoomBox>& rooms) {
   if (!tables_of(bank) || !g_cs_ready || level <= 0) return 0;
