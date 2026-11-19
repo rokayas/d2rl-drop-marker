@@ -11,6 +11,7 @@
 #include <cstring>
 #include <string>
 
+#include "chatline.h"
 #include "cheats.h"
 #include "chronicle.h"
 #include "config.h"
@@ -27,6 +28,7 @@
 #include "perf.h"
 #include "sites.h"
 #include "terror.h"
+#include "track.h"
 #include "arealevel.h"
 #include "autoid.h"
 #include "character.h"
@@ -52,6 +54,29 @@
 namespace d2rcc {
 namespace {
 
+#ifdef D2RCC_RUNES_ONLY
+// The runes-only build, a local cut-down of CabbyCodes: a plugin of its own, with its own settings file and log
+// (rune-marker.toml, rune-marker.log). It has the marks of the runes and rare drops the user tracks, the line said as
+// one drops, and a menu to choose them (overlay.cpp's draw_panel there) - nothing else.
+#define D2RCC_PRODUCT "Rune Marker"
+// Which local build this is, for the log (the version stays CabbyCodes' own): 1 the rune marks and the chat line,
+// 2 the menu, the choice of runes and the other rare drops, 3 the three ways a drop is shown, each a switch.
+#define D2RCC_LOCAL_BUILD "3"
+constexpr D2RL::PluginInfo kInfo{
+    .infoSize = D2RL::PluginInfoSize,
+    .abiVersion = D2RL_PLUGIN_ABI_VERSION,
+    .id = "rune-marker",
+    .name = "Rune Marker",
+    .version = D2RCC_VERSION,
+    .author = "SirCabby (CabbyCodes), cut down locally",
+    .description = "The runes and rare drops you choose - keys, organs, essences, Worldstone Shards, the Ancients' "
+                   "statues - get an icon on the map and a line in the chat as they drop. One small menu (F7) picks "
+                   "what is tracked. No cheats, no console command. A cut-down build of CabbyCodes (GPL-3.0) for "
+                   "offline play.",
+    .flags = D2RL::PluginFlags::Shared | D2RL::PluginFlags::NativeHooks,
+};
+#else
+#define D2RCC_PRODUCT "CabbyCodes"
 constexpr D2RL::PluginInfo kInfo{
     .infoSize = D2RL::PluginInfoSize,
     .abiVersion = D2RL_PLUGIN_ABI_VERSION,
@@ -72,6 +97,7 @@ constexpr D2RL::PluginInfo kInfo{
                    "Items kept the way you left them between games.",
     .flags = D2RL::PluginFlags::Shared | D2RL::PluginFlags::NativeHooks,
 };
+#endif  // D2RCC_RUNES_ONLY
 
 config::Settings g_settings;
 char g_config_dir[MAX_PATH] = {};
@@ -128,8 +154,45 @@ void read_settings() {
   const std::string text = read_config_text();
   g_settings_understood = config::parse(text, &g_settings);
   g_settings_bytes = text.size();
+#ifdef D2RCC_RUNES_ONLY
+  // Only what this build has is taken from the file. Whatever else a file says (one copied from CabbyCodes, say)
+  // stays off, and nothing in this build can switch it on: its menu has what is tracked and nothing else, and there is
+  // no console command.
+  config::Settings lean;
+  lean.enabled = g_settings.enabled;
+  lean.map_runes = g_settings.map_runes;
+  lean.rune_message = g_settings.rune_message;
+  lean.greeting = g_settings.greeting;
+  lean.track_runes = g_settings.track_runes;
+  lean.track_groups = g_settings.track_groups;
+  lean.map_icons = g_settings.map_icons;
+  lean.toggle_key = g_settings.toggle_key;  // the menu's key (menu_key in the file)
+  lean.logging = g_settings.logging;
+  lean.log_level = g_settings.log_level;
+  lean.trace = g_settings.trace;
+  lean.map_enemy_names = false;
+  lean.show_on_pause = false;
+  g_settings = lean;
+#endif
 }
 
+#ifdef D2RCC_RUNES_ONLY
+void log_settings() {
+  char groups[160] = "";
+  size_t at = 0;
+  for (int g = 0; g < track::kGroups && at < sizeof(groups); ++g)
+    if ((g_settings.track_groups >> g) & 1)
+      at += static_cast<size_t>(std::snprintf(groups + at, sizeof(groups) - at, "%s%s", at ? ", " : "",
+                                              track::kGroupNames[g]));
+  logf("settings: %d keys read (%zu bytes); tracking=%d, a tracked drop shown as: minimap icon=%d, chat line=%d, "
+       "pop-up on screen=%d; greeting=%d, menu key=%s, log=%d/%s, trace=%d; runes tracked: %s; other drops tracked: %s",
+       g_settings_understood, g_settings_bytes, g_settings.map_runes, g_settings.map_icons,
+       (g_settings.rune_message & chatline::kChat) != 0, (g_settings.rune_message & chatline::kScreen) != 0,
+       g_settings.greeting, config::key_name(g_settings.toggle_key), g_settings.logging,
+       config::log_level_name(g_settings.log_level), g_settings.trace,
+       track::runes_to_text(g_settings.track_runes).c_str(), groups[0] ? groups : "none");
+}
+#else
 void log_settings() {
   logf("settings: %d keys read (%zu bytes); god=%d mana=%d exp=x%.2f speed=+%d%% exit=%d/%d%%/%s bars=%d boss=%d/%d%% "
        "loot filter=%d chronicle=%d extra=%d elites=%d perfect=%d superior=%d ethereal=%d socketed=%d affixes=%d "
@@ -165,6 +228,7 @@ void log_settings() {
        g_settings.show_items_was_on, g_settings.show_items_unfiltered_was_on, g_settings.logging,
        config::log_level_name(g_settings.log_level), g_settings.trace);
 }
+#endif  // D2RCC_RUNES_ONLY
 
 const char* level_words(LogLevel least) {
   return least == LogLevel::kError     ? "errors only"
@@ -193,6 +257,25 @@ void apply_logging() {
   }
 }
 
+#ifdef D2RCC_RUNES_ONLY
+// The runes-only build's menu changes what is tracked and where a drop is said: those values are written back into the
+// file in place (config::rewrite keeps its comments and its other lines), the watchdog's thread doing the writing.
+void save_settings() {
+  const D2RL::PluginContext* ctx = context();
+  if (!ctx) return;
+  g_settings.track_runes = track::runes();
+  g_settings.track_groups = track::groups();
+  g_settings.map_icons = track::icons();
+  g_settings.rune_message = chatline::mode();
+  const std::string text = config::rewrite(read_config_text(), g_settings);
+  if (ctx->WriteConfig(text.c_str()))
+    logf("settings: written (%zu bytes); shown as: minimap icon=%d, chat line=%d, pop-up=%d; runes tracked: %s",
+         text.size(), g_settings.map_icons, (g_settings.rune_message & chatline::kChat) != 0,
+         (g_settings.rune_message & chatline::kScreen) != 0, track::runes_to_text(g_settings.track_runes).c_str());
+  else
+    log_warn("settings: the loader refused to write the file - the menu's choices hold until the game is closed");
+}
+#else
 void save_settings() {
   const D2RL::PluginContext* ctx = context();
   if (!ctx) return;
@@ -202,6 +285,7 @@ void save_settings() {
   if (ctx->WriteConfig(text.c_str())) logf("settings: written (%zu bytes)", text.size());
   else log_warn("settings: the loader refused to write the file");
 }
+#endif
 
 // --- leaving the game -------------------------------------------------------------------------
 // The ladder: the game's own Save and Exit (the pause menu's button sends the UI
@@ -209,6 +293,8 @@ void save_settings() {
 // loader's widget service, on the UI thread), and if that cannot be queued,
 // is refused, or does not leave the game in time, closing the game. Closing
 // keeps the character alive at its last autosave.
+// (None of it is in the runes-only build, which never leaves or closes the game.)
+#ifndef D2RCC_RUNES_ONLY
 void force_close() {
   logf("closing the game now (%s)", hooks::exit_reason());
   TerminateProcess(GetCurrentProcess(), 0);
@@ -268,6 +354,7 @@ void exit_watch(ULONGLONG now) {
 void game_left() {
   if (InterlockedExchange(&g_exit_phase, 0) != 0) logf("left the game through Save and Exit");
 }
+#endif  // D2RCC_RUNES_ONLY
 
 // The loader refuses UI work while the plugin is loading (OwnerInactive), so
 // this probe is retried from the watchdog until accepted; it re-queues itself
@@ -284,11 +371,16 @@ void __cdecl ui_pump(const D2RL::PluginContext* ctx, void*) noexcept {
   if (g_bound) {
     perf::Timer timer(perf::kUiPump);
     const ULONGLONG now = GetTickCount64();
+#ifndef D2RCC_RUNES_ONLY
     healthbars::collect();
     character::on_ui();  // a preset save, at once even while the Esc menu pauses the game
     mapreveal::on_ui(now);
+#endif
     maploot::on_ui(now);  // the map's item icons loaded by the game's sprite loader, once
+    chatline::on_ui();    // the lines that wait for the game's chat (a local addition)
+#ifndef D2RCC_RUNES_ONLY
     remember::on_ui(now);
+#endif
   }
   // A refused re-queue would end the chain; the watchdog then probes again.
   perf::Timer timer(perf::kUiRequeue);
@@ -314,9 +406,13 @@ DWORD WINAPI watchdog_thread(void*) {
   ULONGLONG last_probe = 0;
   while (!g_stop) {
     const ULONGLONG now = GetTickCount64();
+#ifdef D2RCC_RUNES_ONLY
+    if (InterlockedExchange(&g_save_pending, 0)) save_settings();  // the menu changed a choice
+#else
     const bool remembered_changed = remember::save_due(now);  // asked every time: it clears its own flags
     if (InterlockedExchange(&g_save_pending, 0) || remembered_changed) save_settings();
     character::save_if_changed();
+#endif
     perf::finish(now);
     if (!g_ui_ready && g_threads && now - last_probe > 1000) {
       last_probe = now;
@@ -327,6 +423,12 @@ DWORD WINAPI watchdog_thread(void*) {
         logf("thread service: UI work accepted");
       }
     }
+#ifdef D2RCC_RUNES_ONLY
+    // The runes-only build never leaves or closes the game, and has nothing to save.
+    overlay::watch(now);
+    hooks::install_wanted();
+    const bool by_the_clock = !g_ui_ready && g_threads;
+#else
     if (hooks::exit_requested()) {
       hooks::clear_exit_request();
       begin_exit();
@@ -336,11 +438,14 @@ DWORD WINAPI watchdog_thread(void*) {
     hooks::install_wanted();  // a hook that waits for a switch (one read while nothing waits)
     const bool by_the_clock = (!g_ui_ready && g_threads) || g_exit_phase != 0 || remember::save_waits() ||
                               perf::sampling();
+#endif
     if (g_wake) WaitForSingleObject(g_wake, by_the_clock ? kWatchdogBusyMs : kWatchdogIdleMs);
     else Sleep(kWatchdogBusyMs);
   }
+#ifndef D2RCC_RUNES_ONLY
   character::save_if_changed(true);  // a preset saved just before the plugin unloads
   if (remember::save_due(~0ull)) save_settings();  // ... and a remembered change not written yet
+#endif
   return 0;
 }
 
@@ -355,6 +460,16 @@ void start_pump() {
   if (ctx->QueryService(&g_tables) != D2RL::ServiceQueryResult::Success ||
       !D2RL::HasDataTableServiceField(g_tables, D2RL::DataTableServiceRequiredSize))
     g_tables = nullptr;
+#ifdef D2RCC_RUNES_ONLY
+  // The runes-only build: the tables (which Items rows are runes), the strings (their names) and, below, the
+  // resources (the map's rune icon). Nothing is handed to what this build leaves out.
+  if (!g_tables) log_warn("DataTableService unavailable: runes cannot be told from other items");
+  if (ctx->QueryService(&g_strings) != D2RL::ServiceQueryResult::Success ||
+      !D2RL::HasLocalizationServiceField(g_strings, D2RL::LocalizationServiceRequiredSize) || !g_strings->getStringById)
+    g_strings = nullptr;
+  if (!g_strings) log_warn("LocalizationService unavailable: a rune's drop is said with its English name");
+  mapmarks::set_services(ctx, g_tables, g_strings);
+#else
   if (!g_tables) log_warn("DataTableService unavailable: no area levels, and bosses are not recognised");
   arealevel::set_services(ctx, g_tables);
   loot::set_services(ctx, g_tables);
@@ -377,6 +492,7 @@ void start_pump() {
     g_widgets = nullptr;
     log_warn("WidgetService unavailable: Save and Exit falls back to closing the game");
   }
+#endif
   // The map's icons for unique, set and rune items: files of the plugin's, registered with the loader as it loads.
   if (ctx->QueryService(&g_resources) != D2RL::ServiceQueryResult::Success ||
       !D2RL::HasResourceServiceField(g_resources, D2RL::ResourceServiceRequiredSize) || !g_resources->registerResource)
@@ -404,6 +520,7 @@ DWORD WINAPI worker(void*) {
   if (!ready) {
     log_warn("sites: the image never matched the probe signature - wrong build, or still encrypted");
     for (int k = 0; k < cheats::kCount; ++k) cheats::set_why_not(static_cast<cheats::Kind>(k), "unknown game build");
+    chatline::set_mode(chatline::kOff);  // nothing is marked, so nothing is said either
     return 0;
   }
   const int usable = sites::resolve(base);
@@ -414,13 +531,18 @@ DWORD WINAPI worker(void*) {
        usable, static_cast<int>(sites::kCount), sites::taken_count(), mem::guard_faults());
   game::bind();
   hooks::install();
+#ifndef D2RCC_RUNES_ONLY
   healthbars::bind(g_threads != nullptr);
   mapreveal::bind(g_threads != nullptr);
   mapmarks::bind(g_threads != nullptr);
+#endif
   if (!maploot::icons_registered()) maploot::register_icons(true);  // the files the loader took only once loaded
   maploot::bind(g_threads != nullptr);
   roomfill::bind();
+#ifndef D2RCC_RUNES_ONLY
   remember::bind(g_threads != nullptr);
+#endif
+  chatline::bind();  // the loader's routine for a line in the game's chat (a local addition)
   g_bound = true;
 #ifdef D2RCC_DEV
   {
@@ -455,6 +577,37 @@ void __cdecl on_gameplay_event(const D2RL::PluginContext*, const D2RL::Lifecycle
   logf("event %s player=%u session=%llu prev=%d cur=%d difficulty=%u quest=%u", event_name(e->kind), e->playerId,
        static_cast<unsigned long long>(e->sessionGeneration), e->previousValue, e->currentValue, e->difficulty,
        e->questRecordId);
+#ifdef D2RCC_RUNES_ONLY
+  // The runes-only build: who the local player is and where it stands, the server's read of the ground armed as an
+  // area is entered, and everything let go as the game is left.
+  if (e->kind == K::LocalPlayerReady) {
+    game::set_local_player_id(e->playerId);
+    logf("local player id %u: client unit %p, online=%d (the server unit is met by the tick)", e->playerId,
+         static_cast<void*>(game::local_client_player()), game::is_online() ? 1 : 0);
+  } else if (e->kind == K::LevelChanged) {
+    game::set_current_level(e->currentValue);
+    // Once a session, a few seconds into its first game: a line that says the plugin is on, where a rune's drop will
+    // be said (so that the chat is seen to work without waiting for a rune).
+    static volatile LONG greeted = 0;
+    if (e->currentValue > 0 && g_settings.greeting && g_bound && maploot::any_items() &&
+        !InterlockedExchange(&greeted, 1)) {
+      char hello[128];
+      std::snprintf(hello, sizeof(hello), D2RCC_PRODUCT " is on - %s opens its menu (what to track)",
+                    config::key_name(g_settings.toggle_key));
+      chatline::announce(hello, chatline::kGold, 4000);
+    }
+  }
+  if (e->kind == K::LevelChanged || e->kind == K::GameJoined || e->kind == K::LocalPlayerReady ||
+      e->kind == K::ActChanged)
+    roomfill::arm();
+  if (e->kind == K::GameLeft) {
+    game::clear_local_player();
+    game::set_current_level(-1);
+    cheats::publish(cheats::Status{});
+    maploot::game_left();
+    roomfill::game_left();
+  }
+#else
   if (e->kind == K::GameJoined || e->kind == K::LocalPlayerReady) remember::game_joined(e->sessionGeneration);
   if (e->kind == K::LocalPlayerReady) {
     game::set_local_player_id(e->playerId);
@@ -491,6 +644,7 @@ void __cdecl on_gameplay_event(const D2RL::PluginContext*, const D2RL::Lifecycle
     game_left();
     watchdog::wake();  // what is remembered is written now
   }
+#endif  // D2RCC_RUNES_ONLY
 }
 
 // The game's UI messages, through the loader: the pause menu's open and close
@@ -1211,9 +1365,13 @@ const char* overlay::config_dir_utf8() { return g_config_dir; }
 void overlay::on_setting_changed() {
   apply_logging();
   InterlockedExchange(&g_save_pending, 1);
+#ifndef D2RCC_RUNES_ONLY
   mapreveal::arm(-1);
+#endif
   roomfill::arm();
+#ifndef D2RCC_RUNES_ONLY
   remember::look();
+#endif
   watchdog::wake();
 }
 
@@ -1236,6 +1394,14 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* ctx) noex
   log_set_level(g_settings.log_level);
   if (!g_settings.logging || g_settings.log_level != LogLevel::kInfo) {
     LogAlways always;
+#ifdef D2RCC_RUNES_ONLY
+    if (!g_settings.logging)
+      logf(D2RCC_PRODUCT " (CabbyCodes v%s, cut down): the log is off (logging = false in rune-marker.toml)",
+           D2RCC_VERSION);
+    else
+      logf(D2RCC_PRODUCT " (CabbyCodes v%s, cut down): the log takes %s (log_level = \"%s\" in rune-marker.toml)",
+           D2RCC_VERSION, level_words(g_settings.log_level), config::log_level_name(g_settings.log_level));
+#else
     if (!g_settings.logging)
       logf("CabbyCodes v%s: the log is off (logging = false) - nothing is written but what is asked for by name; "
            "the panel's Diagnostics section or `cabbycodes log on` switches it on",
@@ -1244,12 +1410,22 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* ctx) noex
       logf("CabbyCodes v%s: the log takes %s (log_level = \"%s\"); the panel's Diagnostics section or `cabbycodes "
            "loglevel info` has it take everything",
            D2RCC_VERSION, level_words(g_settings.log_level), config::log_level_name(g_settings.log_level));
+#endif
   }
 
+#ifdef D2RCC_RUNES_ONLY
+  logf(D2RCC_PRODUCT " local build " D2RCC_LOCAL_BUILD " (CabbyCodes v%s cut down to its marks for runes and rare "
+       "drops: one small menu, no console command, no cheats) loading: ABI %u, scope %s, exe base 0x%llX, build '%s' "
+       "(%s), mod '%s'",
+       D2RCC_VERSION, ctx->abiVersion, scope_name(ctx->loadScope), static_cast<unsigned long long>(ctx->exeBase),
+       ctx->buildVersion ? ctx->buildVersion : "?", ctx->buildName ? ctx->buildName : "?",
+       ctx->activeMod ? ctx->activeMod : "");
+#else
   logf("CabbyCodes v%s loading: ABI %u, scope %s, exe base 0x%llX, build '%s' (%s), mod '%s'", D2RCC_VERSION,
        ctx->abiVersion, scope_name(ctx->loadScope), static_cast<unsigned long long>(ctx->exeBase),
        ctx->buildVersion ? ctx->buildVersion : "?", ctx->buildName ? ctx->buildName : "?",
        ctx->activeMod ? ctx->activeMod : "");
+#endif
   {
     const std::string cfg = narrow(ctx->pluginConfigPath);
     const size_t cut = cfg.find_last_of("\\/");
@@ -1257,6 +1433,20 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* ctx) noex
   }
   log_settings();
   cheats::init(g_settings);
+  chatline::set_mode(g_settings.rune_message);
+  track::init(g_settings.track_runes, g_settings.track_groups, g_settings.map_icons);
+#ifdef D2RCC_RUNES_ONLY
+  if (!g_settings.enabled) {
+    logf("settings: enabled = false - the plugin stays idle (nothing of the game is hooked)");
+    return true;
+  }
+  // From here on the game's threads hand their log lines to a writer thread (with trace = true they write
+  // them themselves, as they are made).
+  log_start(g_settings.trace);
+  // No console command, and no listener for the game's UI messages: the menu comes up by its key alone.
+  register_lifecycle(ctx);
+  start_pump();
+#else
   remember::init(g_settings);
   character::set_config_dir(g_config_dir);
   character::load();
@@ -1272,13 +1462,16 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* ctx) noex
   register_lifecycle(ctx);
   register_ui_messages(ctx);
   start_pump();
+#endif
 
   InterlockedExchange(&g_stop, 0);
   g_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
   if (!g_wake) log_warn("the watchdog has no wake event (error %lu) - it looks 40 times a second", GetLastError());
   g_watchdog = CreateThread(nullptr, 0, watchdog_thread, nullptr, 0, nullptr);
   g_worker = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
+#ifndef D2RCC_RUNES_ONLY
   dev::start();
+#endif
   logf("loaded; binding the game's routines in the background");
   return true;
 }
@@ -1287,7 +1480,9 @@ D2RL_PLUGIN_EXPORT void D2RLoaderUnloadPlugin() noexcept {
   using namespace d2rcc;
   InterlockedExchange(&g_stop, 1);
   watchdog::wake();
+#ifndef D2RCC_RUNES_ONLY
   dev::stop();
+#endif
   if (g_worker) {
     WaitForSingleObject(g_worker, 5000);
     CloseHandle(g_worker);

@@ -14,7 +14,13 @@ CC  := x86_64-w64-mingw32-gcc
 RC  := x86_64-w64-mingw32-windres
 
 PROJECT   := D2RCabbyCodes
-PLUGIN_ID := cabbycodes
+# RUNES_ONLY=1 (a local addition, not upstream's): the cut-down build. It keeps the rune marks on the map and the
+# line said as a rune drops, and is a plugin of its own - d2rl-rune-marker.dll, id "rune-marker", with its own
+# settings file and log. The modules of everything else are left out of it (LEAN_OUT below), and D2RCC_RUNES_ONLY
+# takes the panel, the key, the console command and every other hook out of what remains.
+#   make RUNES_ONLY=1        ->  build/runes/d2rl-rune-marker.dll
+RUNES_ONLY ?= 0
+PLUGIN_ID := $(if $(filter 1,$(RUNES_ONLY)),rune-marker,cabbycodes)
 NAME      := d2rl-$(PLUGIN_ID)
 # The mod folder the game is launched with (-mod <name>); D2RMM's output mod.
 MOD_NAME  ?= D2RMM
@@ -29,7 +35,7 @@ VER_PATCH := $(word 3,$(VER_PARTS))
 # dump, the command file and the UI message log. Each flavour has its own
 # build directory, so `make` and the release `make dist` never share objects.
 DEV       ?= 1
-BUILD     := build/$(if $(filter 1,$(DEV)),dev,release)
+BUILD     := build/$(if $(filter 1,$(RUNES_ONLY)),runes,$(if $(filter 1,$(DEV)),dev,release))
 TARGET    := $(BUILD)/$(NAME).dll
 
 # Per-machine config (game install path), kept out of git. Copy
@@ -43,6 +49,13 @@ $(eval $(REV):;@:)
 endif
 
 SRCS := $(wildcard src/*.cpp)
+# The runes-only build: none of these modules is compiled or linked (the cheats, the loot and character tools, the
+# health bars, the map reveal, what is kept between games, the developer aids).
+LEAN_OUT := arealevel autoid character chronicle consumables cube curses dropodds enemies healthbars hometown \
+            itemlevel itemseed loot mapreveal npcservice passive presets remember requirements revive terror dev
+ifeq ($(RUNES_ONLY),1)
+SRCS := $(filter-out $(patsubst %,src/%.cpp,$(LEAN_OUT)),$(SRCS))
+endif
 
 # Dear ImGui (vendored, MIT): the core plus the Win32 and DX12 backends - D2R
 # renders through Direct3D 12 only.
@@ -69,6 +82,11 @@ RES_OBJS     := $(patsubst res/%.rc,$(BUILD)/res/%.o,$(RES_SRCS))
 OBJS         := $(MOD_OBJS) $(IMGUI_OBJS) $(MINHOOK_OBJS) $(RES_OBJS)
 
 DEVFLAGS := $(if $(filter 1,$(DEV)),-DD2RCC_DEV=1,)
+ifeq ($(RUNES_ONLY),1)
+# Never the developer aids; and what the switch leaves unused in the files that remain is not worth a warning.
+DEVFLAGS := -DD2RCC_RUNES_ONLY=1 -Wno-unused-function -Wno-unused-variable -Wno-unused-const-variable \
+            -Wno-unused-but-set-variable
+endif
 
 # -MMD -MP: emit .d header-dependency files so editing a header recompiles every
 # .cpp that includes it.
@@ -79,7 +97,7 @@ CXXFLAGS := $(DEVFLAGS) -std=c++20 -O2 -Wall -Wextra -Wno-cast-function-type -Wn
             -MMD -MP
 CFLAGS   := -O2 -Wall -DWIN32_LEAN_AND_MEAN -I$(MINHOOK_DIR)/include \
             -ffunction-sections -fdata-sections -MMD -MP
-RCFLAGS  := -I res -I $(BUILD)/res -I $(SDK_INC)
+RCFLAGS  := -I res -I $(BUILD)/res -I $(SDK_INC) $(if $(filter 1,$(RUNES_ONLY)),-DD2RCC_RUNES_ONLY=1,)
 
 # -static*: fold the C/C++ runtime in so the DLL has no external mingw runtime
 # deps. Only the three D2RLoader entry points are exported (dllexport in
@@ -118,7 +136,7 @@ $(BUILD)/res/%.o: res/%.rc | $(BUILD)
 	@mkdir -p $(dir $@)
 	$(RC) $(RCFLAGS) -i $< -o $@
 
-$(BUILD)/res/default-config.o: res/cabbycodes.toml
+$(BUILD)/res/default-config.o: res/cabbycodes.toml res/rune-marker.toml
 $(BUILD)/res/version.o: $(BUILD)/res/version_gen.h
 
 # The version resource reads its numbers from a header the build writes: windres

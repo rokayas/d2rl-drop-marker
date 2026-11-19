@@ -29,7 +29,11 @@ constexpr int kSize = 56;         // HD pixels, square; the low-end file is half
 constexpr int kLowEndSize = kSize / 2;
 // The sprite loader's name: a path under data/hd/global/ui/, with neither the folder nor the extension. The files go in
 // the plugin's own namespace there (d2rloader/<plugin id>/, the Resource service's rule).
+#ifdef D2RCC_RUNES_ONLY
+constexpr const char* kSpriteFolder = "d2rloader/rune-marker/mapicons/";  // the runes-only build's own plugin id
+#else
 constexpr const char* kSpriteFolder = "d2rloader/cabbycodes/mapicons/";
+#endif
 constexpr const char* kLoaderRoot = "data/hd/global/ui/";
 
 // The game's HD sprite file ("SpA1": the .sprite files under data/hd/global/ui). A 0x28-byte header, then the frames

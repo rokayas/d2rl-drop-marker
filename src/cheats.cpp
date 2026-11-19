@@ -130,6 +130,10 @@ void init(const config::Settings& s) {
 const char* name(Kind k) { return k >= 0 && k < kCount ? kNames[k] : "?"; }
 
 bool enabled(Kind k) {
+#ifdef D2RCC_RUNES_ONLY
+  // The runes-only build has one feature (and its log): nothing else is ever on, whatever a settings file says.
+  if (k != kMapRunes && k != kLogging) return false;
+#endif
   if (k == kExpMultiplier) return g_exp_x100 > 100;
   if (k == kMoveSpeed) return g_speed > 0;
   if (k == kExtraDrops) return g_extra_drops > 0;

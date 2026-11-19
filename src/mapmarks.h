@@ -524,4 +524,8 @@ struct Stats {
 };
 Stats stats();
 
+// The game's own text for one of its string keys (an item's code is one: "r01" is the El Rune's), as the game shows it;
+// false when the loader has none. Asked where the tables are read. A local addition, for the rune drop message.
+bool game_string(const char* key, char* out, size_t cap);
+
 }  // namespace d2rcc::mapmarks

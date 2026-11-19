@@ -403,6 +403,15 @@ void tick(void* game, Unit* player) {
   st.experience = game::get_stat(player, game::kExperience);
   st.velocity = game::get_stat(player, game::kVelocityPercent);
   ++st.ticks;
+#ifdef D2RCC_RUNES_ONLY
+  // The runes-only build: the Items rows the rune marks read (which rows are runes, and their names), and the server's
+  // read of the items on the ground (roomfill.cpp reads the area's built rooms; it builds none with only this on).
+  if (const uint8_t bank = game::unit_table_bank(player);
+      on(cheats::kMapRunes) && !maploot::ready(bank) && (st.ticks % 125) == 1)
+    maploot::collect();
+  roomfill::on_tick(game, player, st.ticks);
+  cheats::publish(st);
+#else
   if (!g_levels_collected && (cheats::enabled(cheats::kAreaLevelAutomap) || cheats::enabled(cheats::kAreaLevelWaypoints))) {
     g_levels_collected = true;  // one attempt per game; the log says how it went
     arealevel::collect();
@@ -533,6 +542,7 @@ void tick(void* game, Unit* player) {
   }
   st.exit_armed = g_exit_armed;
   cheats::publish(st);
+#endif  // D2RCC_RUNES_ONLY
 }
 
 // --- the hooks -----------------------------------------------------------------------------
@@ -762,9 +772,15 @@ uint64_t __fastcall hk_wp_populate(void* a, void* b, void* c, void* d) noexcept 
 void __fastcall hk_tc_drop(void* game, Unit* source, Unit* killer, const void* tc, int32_t forced_quality,
                            int32_t item_level, int32_t skip_nodrop, Unit** out, int32_t* out_count,
                            int32_t out_max) noexcept {
+#ifdef D2RCC_RUNES_ONLY
+  // The runes-only build: the game's own drop, untouched; only told on that something dropped.
+  if (g_orig_tc_drop)
+    g_orig_tc_drop(game, source, killer, tc, forced_quality, item_level, skip_nodrop, out, out_count, out_max);
+#else
   if (g_orig_tc_drop)
     loot::drop(g_orig_tc_drop, game, source, killer, tc, forced_quality, item_level, skip_nodrop, out, out_count,
                out_max);
+#endif
   maploot::dropped(source);  // the area's items read again for the map; an object's drop: its chests too (one opened)
 }
 
@@ -995,7 +1011,12 @@ void __fastcall hk_socketed_free(void* game, Unit* item) noexcept {
 void __fastcall hk_item_notice(void* game, Unit* player, Unit* item, uint32_t flags, uint32_t command, int32_t mode,
                                uint32_t page, uint32_t body, uint32_t position) noexcept {
   const uintptr_t from = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+#ifdef D2RCC_RUNES_ONLY
+  // The runes-only build: the game's own notice, untouched.
+  if (g_orig_item_notice) g_orig_item_notice(game, player, item, flags, command, mode, page, body, position);
+#else
   autoid::notice(g_orig_item_notice, game, player, item, flags, command, mode, page, body, position, from);
+#endif
   // The pick-up's own notice: the item is off the ground (its icon on the map goes).
   if (sites::identify_facts().known && from == sites::identify_facts().pickup_notice) maploot::picked_up(item);
 }
@@ -1207,6 +1228,8 @@ void* hk_game_present(void* instance, void* result, void* record) {
 // callee-saved register when they call it: the server's SKILLMANA_Consume in
 // rsi, the client's own mana check in rbx. A naked thunk hands both registers
 // (and the return address, for the log) to the C++ side.
+// (Neither this hook nor the protected-stat one below is in the runes-only build.)
+#ifndef D2RCC_RUNES_ONLY
 extern "C" int32_t d2rcc_mana_cost_impl(uint32_t data_ctx, int32_t skill, int32_t level, uint64_t rsi, uint64_t rbx,
                                         uint64_t return_address) noexcept {
   using namespace d2rcc;
@@ -1301,6 +1324,7 @@ extern "C" __attribute__((naked)) void d2rcc_protected_stat_thunk() noexcept {
   asm("movq %rdi, %r8\n\t"
       "jmp d2rcc_protected_stat_impl");
 }
+#endif  // D2RCC_RUNES_ONLY
 
 // --- the automap's marker decision (enemies, chests and items on the map) -------------------------------------------
 // The automap's draw of one unit (the thread that draws the automap) asks the game's marker decision first, for every
@@ -1317,7 +1341,9 @@ extern "C" bool d2rcc_marker_decision_impl(d2rcc::game::Unit* unit, int32_t* mar
   using namespace d2rcc::hooks;
   const bool drawn = g_orig_marker_decision ? g_orig_marker_decision(unit, marker, name_kind) : false;
   if (reinterpret_cast<uintptr_t>(__builtin_return_address(0)) == sites::map_facts().decision_return && view) {
+#ifndef D2RCC_RUNES_ONLY
     mapmarks::unit_drawn(unit, view);
+#endif
     maploot::unit_drawn(unit, view);
   }
   return drawn;
@@ -1367,6 +1393,24 @@ bool install() {
     for (int k = 0; k < cheats::kCount; ++k) cheats::set_why_not(static_cast<cheats::Kind>(k), "stat helpers not found");
     return false;
   }
+#ifdef D2RCC_RUNES_ONLY
+  // The runes-only build hooks what the rune marks need and nothing else: the tick (the Items rows read, and the
+  // server's read of the items on the ground), the drop core (something dropped), the item notice (a rune picked up;
+  // install_wanted) and the automap's marker decision (the marks drawn). No cheat's routine is hooked or patched.
+  const bool lean_regen =
+      install_one(sites::kPlayerStatRegen, &hk_regen, &g_orig_regen, "D2GAME_PLAYER_ApplyStatRegen");
+  install_one(sites::kTcDropCore, &hk_tc_drop, &g_orig_tc_drop, "TreasureClassDropCore");
+  InterlockedExchange(&g_notice_state, sites::identify_facts().known ? kNoticeWaiting : kNoticeUnbound);
+  install_wanted();
+  mapmarks::set_draw_hooked(game::has_map_draw() && sites::map_facts().decision &&
+                            install_one(sites::kAutomapMarkerDecision,
+                                        reinterpret_cast<MarkerDecisionFn>(&d2rcc_marker_decision_thunk),
+                                        &g_orig_marker_decision, "automap's marker decision"));
+  for (int k = 0; k < cheats::kCount; ++k)
+    if (k != cheats::kMapRunes) cheats::set_why_not(static_cast<cheats::Kind>(k), "not part of this build");
+  logf("hooks: the runes-only build - nothing else of the game is hooked or changed");
+  return lean_regen;
+#else
   const bool regen = install_one(sites::kPlayerStatRegen, &hk_regen, &g_orig_regen, "D2GAME_PLAYER_ApplyStatRegen");
   const bool execute = install_one(sites::kExecuteEvents, &hk_execute_events, &g_orig_execute, "SUNITDMG_ExecuteEvents");
   const bool finalize = install_one(sites::kFinalizeDamage, &hk_finalize_damage, &g_orig_finalize, "SUNITDMG_FinalizeDamage");
@@ -1712,11 +1756,14 @@ bool install() {
     logf("hooks: god mode empties the hits on you, but life lost outside a hit (poison already on you, Blood Mana, "
          "crushing blow) is not refused: the protected-stat test is not hooked");
   return regen;
+#endif  // D2RCC_RUNES_ONLY
 }
 
 void uninstall() {
   InterlockedExchange(&g_notice_state, kNoticeUnbound);  // nothing is hooked from here on
+#ifndef D2RCC_RUNES_ONLY
   npcservice::restore();  // every NPC's record as the game has it
+#endif
   g_orig_regen = nullptr;
   g_orig_execute = nullptr;
   g_orig_finalize = nullptr;
@@ -1769,8 +1816,10 @@ void uninstall() {
   g_orig_killself = nullptr;
   g_orig_requirements = nullptr;
   g_orig_marker_decision = nullptr;
+#ifndef D2RCC_RUNES_ONLY
   cube::hooked(false);
   hometown::wake_hooked(false);
+#endif
   g_book_debit_return = 0;
   g_items_why = nullptr;
 }
@@ -1778,9 +1827,11 @@ void uninstall() {
 void game_left() {
   g_levels_collected = false;
   g_monsters_collected = false;
+#ifndef D2RCC_RUNES_ONLY
   arealevel::reset();
   itemseed::game_left();
   requirements::game_left();
+#endif
 }
 
 unsigned life_losses_kept() { return static_cast<unsigned>(g_life_kept); }

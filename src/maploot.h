@@ -168,7 +168,9 @@ constexpr bool fleeting_forgotten(uint32_t seen_at_draw, uint32_t draw) {
 
 // The item switches. A rune is an item of the rune item type (ItemTypes "rune"); a unique or a set item is one of that
 // quality (the item's unit data +0x00: 7 unique, 5 set). An item is on the ground in mode 3 (or 5, falling there).
-enum ItemKind : uint8_t { kItemNone = 0, kItemUnique, kItemSet, kItemRune, kItemKinds };
+// (kItemSpecial, a local addition: one of track.h's other rare drops - a key, an organ, an essence, a Worldstone Shard,
+// a statue or a fragment - told by its Items row; it goes with the runes' switch.)
+enum ItemKind : uint8_t { kItemNone = 0, kItemUnique, kItemSet, kItemRune, kItemSpecial, kItemKinds };
 constexpr int32_t kQualitySet = 5, kQualityUnique = 7;
 constexpr uint32_t kItemOnGround = 3, kItemDropping = 5;
 constexpr ItemKind item_kind(int32_t quality, bool rune) {
@@ -184,10 +186,10 @@ struct Tint {
 constexpr Tint kNoTint{1.0f, 1.0f, 1.0f};
 constexpr Tint kOpenableTint{0.55f, 0.55f, 0.6f};  // a grey chest: what opens for loot and is no chest
 constexpr Tint item_tint(ItemKind k) {
-  return k == kItemUnique ? Tint{199 / 255.0f, 179 / 255.0f, 119 / 255.0f}
-         : k == kItemSet  ? Tint{0.0f, 252 / 255.0f, 0.0f}
-         : k == kItemRune ? Tint{1.0f, 168 / 255.0f, 0.0f}
-                          : kNoTint;
+  return k == kItemUnique || k == kItemSpecial ? Tint{199 / 255.0f, 179 / 255.0f, 119 / 255.0f}
+         : k == kItemSet                       ? Tint{0.0f, 252 / 255.0f, 0.0f}
+         : k == kItemRune                      ? Tint{1.0f, 168 / 255.0f, 0.0f}
+                                               : kNoTint;
 }
 
 // Where the automap draws a cell (its list draw, 0xD6F10, for each cell of a layer's lists): the cell's key is the
@@ -260,6 +262,7 @@ struct ServerItem {
   uint32_t id = 0;
   ItemKind kind = kItemNone;
   int32_t px = 0, py = 0;
+  uint32_t cls = UINT32_MAX;  // its Items row (a local addition: the rune drop message names the rune)
 };
 // The items on the ground of a server unit, if it is one the switches can show (else kItemNone).
 ItemKind ground_item_kind(Unit* item);

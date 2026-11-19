@@ -1139,6 +1139,11 @@ void marks_drawn(const void* view, bool enemies, int exits_of) {
 
 }  // namespace
 
+bool game_string(const char* key, char* out, size_t cap) {
+  if (!key || !out || cap < 2) return false;
+  return string_by_key(key, out, cap);
+}
+
 void set_services(const D2RL::PluginContext* ctx, const D2RL::DataTableService* tables,
                   const D2RL::LocalizationService* strings) {
   if (!g_cs_ready) {

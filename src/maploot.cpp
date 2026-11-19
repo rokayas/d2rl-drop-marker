@@ -18,6 +18,9 @@
 #include "mem.h"
 #include "perf.h"
 #include "sites.h"
+#include "chatline.h"
+#include "toast.h"
+#include "track.h"
 
 namespace d2rcc::maploot {
 namespace {
@@ -28,6 +31,10 @@ constexpr int kMaxLevels = 1024;
 constexpr uint32_t kMaxItems = 4096;
 constexpr uint32_t kItemsRow = 0x1C0;   // the compiled Items row (weapons, armor and misc in one table)
 constexpr uintptr_t kItemsType = 0x12E;  // int16: its ItemTypes row
+// A local addition (the rune drop message): the row's code, and the runes' names kept for the message.
+constexpr uintptr_t kItemsCode = 0x80;   // four characters, "r01 " and so on (spaces after a shorter code)
+constexpr int kMaxRuneNames = 128;
+constexpr size_t kRuneNameLen = 48;
 constexpr size_t kMaxChestMarks = 8192;  // chests and openables known in a game
 constexpr size_t kMaxItemMarks = 2048;   // items on the ground marked at once
 constexpr int kWhiteCross = 6;           // the automap's unit crosses: frame 6 is white (an NPC's), tinted here
@@ -52,6 +59,13 @@ struct Tables {
   uint32_t items;
   uint8_t rune[kMaxItems];     // the Items row is a rune
   int runes;
+  uint8_t rune_name_at[kMaxItems];               // a rune's name in rune_names, plus one (0: none kept)
+  char rune_names[kMaxRuneNames][kRuneNameLen];  // as the game shows it ("Ber Rune")
+  // What is tracked (track.h, a local addition): a rune's number, 1 .. 33 (0: not one of r01 .. r33), and for one of the
+  // other rare drops its place in track::kSpecials, plus one (0: none). Their names are kept with the runes' above.
+  uint8_t rune_no[kMaxItems];
+  uint8_t special[kMaxItems];
+  int specials;
 };
 
 // A chest (or anything that opens for loot) known in this game, by where it stands (its level and its pixels: an object
@@ -71,6 +85,7 @@ struct ItemMark {
   uint8_t kind = kItemNone;
   int level = -1;
   int32_t px = 0, py = 0;
+  uint32_t cls = UINT32_MAX;  // its Items row, when known (the rune drop message names the rune by it)
 };
 // An area's objects or items as the server read them, waiting for the automap's next draw.
 struct Pending {
@@ -114,6 +129,13 @@ int g_icon_tries = 0;
 DWORD g_ui_thread = 0;
 volatile LONG g_release = 0, g_release_logged = 0;
 
+// A local addition: the runes whose drop was said in this game, by place_key and by unit id. Any thread, under
+// g_said_lock: the server's read of the ground says a rune (the game's thread), and so does the client's sight of one
+// (the automap's draw thread), whichever comes first.
+SRWLOCK g_said_lock = SRWLOCK_INIT;
+std::unordered_set<uint64_t> g_said;
+std::unordered_set<uint32_t> g_said_ids;
+
 // The automap's draw thread only.
 std::unordered_map<uint64_t, ChestMark> g_chests;  // by place_key
 std::unordered_map<uint32_t, ItemMark> g_items;
@@ -151,6 +173,42 @@ uint64_t place_key(int level, int32_t px, int32_t py) {
 volatile LONG g_sparkle_bad = 0;
 ObjectKind kind_of(ObjectKind class_kind, int sparkle) {
   return g_sparkle_bad ? class_kind : with_sparkle(class_kind, sparkle);
+}
+
+// --- the rune drop message (a local addition) -----------------------------------------------------------------------
+
+// The game's colour codes ("ÿc" and a character) taken out of a name, and the name cut at its first line.
+void plain_text(char* s) {
+  char* w = s;
+  for (const char* r = s; *r;) {
+    if (static_cast<unsigned char>(r[0]) == 0xC3 && static_cast<unsigned char>(r[1]) == 0xBF && r[2] == 'c' && r[3]) {
+      r += 4;
+      continue;
+    }
+    if (*r == '\n' || *r == '\r') break;
+    *w++ = *r++;
+  }
+  *w = 0;
+}
+
+// A tracked item's name from its item code: the game's own string of that key ("r30" is "Ber Rune", "pk1" is "Key of
+// Terror", in the game's language), else the English name of a stock rune r01 .. r33 or of one of track.h's other
+// items (`special`: its place in track::kSpecials, or -1), else nothing (the message then says "A rune").
+void item_name(uint32_t code, int special, char* out, size_t cap) {
+  out[0] = 0;
+  char key[5] = {};
+  for (int i = 0; i < 4; ++i) {
+    const char c = static_cast<char>((code >> (8 * i)) & 0xFF);
+    if (c == ' ' || c == 0) break;
+    key[i] = c;
+  }
+  if (!key[0]) return;
+  if (mapmarks::game_string(key, out, cap)) {
+    plain_text(out);
+    if (out[0]) return;
+  }
+  if (special >= 0 && special < track::kSpecialCount) std::snprintf(out, cap, "%s", track::kSpecials[special].english);
+  else if (const int n = track::rune_number(code)) std::snprintf(out, cap, "%s Rune", track::kRuneNames[n - 1]);
 }
 
 // --- the tables (game thread) ---------------------------------------------------------------------------------------
@@ -234,11 +292,31 @@ bool read_bank(int b, Tables* t) {
     rune_type = static_cast<int32_t>(rune_row.rowIndex);
   t->items = items.rowCount;
   t->runes = 0;
+  t->specials = 0;
+  std::memset(t->rune_name_at, 0, sizeof(t->rune_name_at));
+  std::memset(t->rune_no, 0, sizeof(t->rune_no));
+  std::memset(t->special, 0, sizeof(t->special));
+  int names = 0;
   for (uint32_t i = 0; i < items.rowCount; ++i) {
+    const uintptr_t row = reinterpret_cast<uintptr_t>(items.rows) + static_cast<uintptr_t>(i) * kItemsRow;
     int16_t type = -1;
-    mem::read_safe(reinterpret_cast<uintptr_t>(items.rows) + static_cast<uintptr_t>(i) * kItemsRow + kItemsType, &type);
+    mem::read_safe(row + kItemsType, &type);
     t->rune[i] = rune_type > 0 && type == rune_type ? 1 : 0;
     t->runes += t->rune[i];
+    // Local additions: which rune it is, whether it is one of the other tracked drops (by its code), and its name for
+    // the drop message.
+    uint32_t code = 0;
+    if (!mem::read_safe(row + kItemsCode, &code)) continue;
+    const int special = t->rune[i] ? -1 : track::special_index(code);
+    if (t->rune[i]) t->rune_no[i] = static_cast<uint8_t>(track::rune_number(code));
+    if (special >= 0) {
+      t->special[i] = static_cast<uint8_t>(special + 1);
+      ++t->specials;
+    }
+    if ((t->rune[i] || special >= 0) && names < kMaxRuneNames) {
+      item_name(code, special, t->rune_names[names], kRuneNameLen);
+      if (t->rune_names[names][0]) t->rune_name_at[i] = static_cast<uint8_t>(++names);
+    }
   }
   return true;
 }
@@ -306,10 +384,30 @@ void release_icons() {
 bool chests_on() { return g_chests_ok && cheats::enabled(cheats::kMapChests); }
 bool item_on(ItemKind k) {
   if (!g_items_ok) return false;
-  return k == kItemUnique ? cheats::enabled(cheats::kMapUniques)
-         : k == kItemSet  ? cheats::enabled(cheats::kMapSets)
-         : k == kItemRune ? cheats::enabled(cheats::kMapRunes)
-                          : false;
+  return k == kItemUnique                        ? cheats::enabled(cheats::kMapUniques)
+         : k == kItemSet                         ? cheats::enabled(cheats::kMapSets)
+         : k == kItemRune || k == kItemSpecial   ? cheats::enabled(cheats::kMapRunes)
+                                                 : false;
+}
+
+// What an item is to the switches, by its Items row and its quality: one of track.h's other rare drops first (told by
+// its code), then a rune, a unique or a set item.
+ItemKind kind_of_item(const Tables* t, uint32_t cls, int32_t quality) {
+  if (cls < t->items && t->special[cls]) return kItemSpecial;
+  return item_kind(quality, cls < t->items && t->rune[cls]);
+}
+
+// A local addition: whether the user tracks this item now (track.h: the menu's choices). A rune by its number (a rune
+// that is none of r01 .. r33, a mod's own: tracked), another rare drop by its group; unique and set items have their
+// own switches and no choice here. Asked as an item is drawn and as its drop is said, so a choice changed in the menu
+// holds at once.
+bool tracked(const Tables* t, uint8_t kind, uint32_t cls) {
+  if (kind == kItemRune) return !t || cls >= t->items || track::rune(t->rune_no[cls]);
+  if (kind == kItemSpecial) {
+    const int at = t && cls < t->items ? t->special[cls] : 0;
+    return at > 0 && track::group(track::kSpecials[at - 1].group);
+  }
+  return true;
 }
 
 void count_chest(const ChestMark& m, bool was_known, bool was_open) {
@@ -342,6 +440,30 @@ bool note_chest(const ChestMark& m) {
   return false;
 }
 
+// A local addition: a rune noted for the first time in a game is said (chatline.h: a line in the game's chat, or on
+// screen), once an item and once a place - the server makes an item again with another id when its room was let go and
+// built again, and that is the same rune lying where it was. Any thread: the server's read of the ground says it as
+// the rune drops, whether the automap is drawn or not; the client's sight says one the server's read did not bring (a
+// rune the player put down).
+// (`kind`: a rune, said in the game's orange, or one of track.h's other rare drops, said in its gold. One the user does
+// not track is not said, and not taken as said: tracked later while it still lies there, it is said then.)
+void say_item(uint32_t id, uint8_t bank, int level, int32_t px, int32_t py, uint32_t cls, uint8_t kind,
+              const char* from) {
+  const Tables* t = tables_of(bank);
+  if (!tracked(t, kind, cls)) return;
+  AcquireSRWLockExclusive(&g_said_lock);
+  const bool new_id = g_said_ids.insert(id).second;
+  const bool new_place = g_said.insert(place_key(level, px, py)).second;
+  ReleaseSRWLockExclusive(&g_said_lock);
+  if (!new_id || !new_place) return;
+  const char* name = t && cls < t->items && t->rune_name_at[cls] ? t->rune_names[t->rune_name_at[cls] - 1] : "";
+  char text[96];
+  std::snprintf(text, sizeof(text), "%s dropped", name[0] ? name : kind == kItemRune ? "A rune" : "A tracked item");
+  chatline::announce(text, kind == kItemRune ? chatline::kOrange : chatline::kGold);
+  logf("items: \"%s\" (level %d, %s) handed on to be said (%s)", text, level, from,
+       chatline::available() ? "the game's chat" : "on screen");
+}
+
 void note_item(uint32_t id, const ItemMark& m, const char* from) {
   if (g_items.size() >= kMaxItemMarks && !g_items.count(id)) {
     if (log_once(&g_full_warned, LogLevel::kWarning))
@@ -349,11 +471,16 @@ void note_item(uint32_t id, const ItemMark& m, const char* from) {
     return;
   }
   g_items[id] = m;
+  // Said at every sight of it, which says it once (say_item): also the first time after the menu made it a tracked one.
+  if ((m.kind == kItemRune || m.kind == kItemSpecial) && item_on(static_cast<ItemKind>(m.kind)))
+    say_item(id, m.bank, m.level, m.px, m.py, m.cls, m.kind, from);
   if (g_items_counted.emplace(id, true).second) {
     InterlockedIncrement(&g_stat_items_seen);
     if (log_first(&g_item_logged, kLogFirst))
-      logf("items: a %s on the ground (level %d) marked on the map, %s",
-           m.kind == kItemUnique ? "unique item" : m.kind == kItemSet ? "set item" : "rune", m.level, from);
+      logf("items: a %s on the ground (level %d) noted for the map, %s",
+           m.kind == kItemUnique ? "unique item" : m.kind == kItemSet ? "set item" : m.kind == kItemRune ? "rune"
+                                                                                                           : "tracked drop",
+           m.level, from);
   }
 }
 
@@ -440,6 +567,7 @@ void take_pending() {
       m.level = p.level;
       m.px = s.px;
       m.py = s.py;
+      m.cls = s.cls;
       note_item(s.id, m, "read from the server's rooms of the area");
     }
   }
@@ -479,11 +607,12 @@ void seen(Unit* u, uint32_t type) {
     return;
   }
   if (!on_ground(game::unit_mode(u))) return;
-  const ItemKind k = item_kind(game::item_quality(u), cls < t->items && t->rune[cls]);
+  const ItemKind k = kind_of_item(t, cls, game::item_quality(u));
   if (k == kItemNone || !item_on(k)) return;
   ItemMark m;
   m.bank = bank;
   m.kind = k;
+  m.cls = cls;
   m.level = game::unit_level_id(u);
   if (m.level <= 0 || !game::unit_pixels(u, &m.px, &m.py)) return;
   note_item(id, m, "seen by the client");
@@ -556,11 +685,18 @@ void draw_all(const void* view) {
   const void* crosses = icons ? nullptr : game::map_cross_sprite(&cross_w, &cross_h);
   for (const auto& [id, m] : g_items) {
     if (!item_on(static_cast<ItemKind>(m.kind)) || layer_of(m.bank, m.level, &layers) != layer) continue;
+    if (!tracked(tables_of(m.bank), m.kind, m.cls)) continue;  // a rune or a rare drop the user does not track now
+    // ... or tracks without its icon (the menu's "Minimap icon" switch; the marks themselves are kept, so the icons
+    // are back the moment it is switched on).
+    if ((m.kind == kItemRune || m.kind == kItemSpecial) && !track::icons()) continue;
     uint64_t point = 0;
     if (game::map_point(view, m.px, m.py, &point)) {
       const int32_t px = static_cast<int32_t>(point), py = static_cast<int32_t>(point >> 32);
       if (icons) {
-        const int icon = m.kind == kItemUnique ? mapicons::kUnique : m.kind == kItemSet ? mapicons::kSet : mapicons::kRune;
+        // One of track.h's other rare drops takes the unique items' gold star: this build has no unique items' marks.
+        const int icon = m.kind == kItemUnique || m.kind == kItemSpecial ? mapicons::kUnique
+                         : m.kind == kItemSet                           ? mapicons::kSet
+                                                                        : mapicons::kRune;
         const CellPlace at = centred(px, py, mapicons::kSize, mapicons::kSize, mv.scale);
         game::map_draw_sprite(g_icon[icon], 0, at.x, at.y, mv.scale, 1.0f, 1.0f, 1.0f);
       } else if (crosses) {
@@ -668,9 +804,10 @@ void collect() {
     if (t.ready || !read_bank(b, &t)) continue;
     InterlockedExchange(&t.ready, 1);
     logf("map: bank %d: %d object classes - %d super chests, %d quest chests, %d other chests, %d other objects that "
-         "open for loot (the chest icons: cell %d, the sparkle chest %d); %u Items rows, %d of them runes",
+         "open for loot (the chest icons: cell %d, the sparkle chest %d); %u Items rows, %d of them runes, %d of them "
+         "the other rare drops that can be tracked (of %d known by their codes)",
          b, t.objects, t.counts[kSuperChest], t.counts[kQuestChest], t.counts[kChest], t.counts[kOpenable], t.coin_cell,
-         t.sparkle_cell, t.items, t.runes);
+         t.sparkle_cell, t.items, t.runes, t.specials, track::kSpecialCount);
     if (t.coin_cell <= 0 || t.sparkle_cell <= 0)
       log_warn("map: bank %d: the automap's chest icons not found in the Objects rows (the stash's %d, the quest "
                "chests' %d) - the chests without one are not drawn",
@@ -738,12 +875,19 @@ ItemKind ground_item_kind(Unit* item) {
   const Tables* t = tables_of(game::unit_table_bank(item));
   if (!t) return kItemNone;
   const uint32_t cls = game::unit_class(item);
-  return item_kind(game::item_quality(item), cls < t->items && t->rune[cls]);
+  return kind_of_item(t, cls, game::item_quality(item));
 }
 
 int items_found(uint8_t bank, int level, const ServerItem* items, size_t count,
                 const std::vector<mapmarks::RoomBox>& rooms) {
   if (!tables_of(bank) || !g_cs_ready || level <= 0) return 0;
+  // A local addition: a rune this read finds is said now, on the game's thread, as it drops - its mark on the map waits
+  // for the automap's next draw, and would wait for as long as the automap is not shown.
+  if (item_on(kItemRune))
+    for (size_t i = 0; i < count; ++i)
+      if (items[i].kind == kItemRune || items[i].kind == kItemSpecial)
+        say_item(items[i].id, bank, level, items[i].px, items[i].py, items[i].cls, items[i].kind,
+                 "read from the server's rooms");
   Pending p;
   p.items = true;
   p.bank = bank;
@@ -849,6 +993,12 @@ void unit_drawn(Unit* unit, const void* view) {
 }
 
 void game_left() {
+  chatline::clear();
+  toast::clear();
+  AcquireSRWLockExclusive(&g_said_lock);  // the next game's runes are said afresh
+  g_said.clear();
+  g_said_ids.clear();
+  ReleaseSRWLockExclusive(&g_said_lock);
   InterlockedExchange(&g_reset, 1);
   InterlockedExchange(&g_dropped, 1);
   InterlockedExchange(&g_opened, 0);

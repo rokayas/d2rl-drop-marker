@@ -1,5 +1,6 @@
 // Windows version resource, so mod managers and Explorer show what this DLL is.
 // The numbers come from the VERSION file through build/res/version_gen.h (Makefile).
+// The runes-only build (D2RCC_RUNES_ONLY) says what it is: a cut-down build, not SirCabby's release.
 #include <windows.h>
 #include "version_gen.h"
 
@@ -16,6 +17,16 @@ BEGIN
   BEGIN
     BLOCK "040904b0"
     BEGIN
+#ifdef D2RCC_RUNES_ONLY
+      VALUE "CompanyName",      "Local build (cut down from CabbyCodes by SirCabby)"
+      VALUE "FileDescription",  "Rune Marker for Diablo II: Resurrected (D2RLoader plugin; CabbyCodes cut down to its rune marks)"
+      VALUE "FileVersion",      RC_VER_STR
+      VALUE "InternalName",     "d2rl-rune-marker"
+      VALUE "LegalCopyright",   "GPL-3.0"
+      VALUE "OriginalFilename", "d2rl-rune-marker.dll"
+      VALUE "ProductName",      "Rune Marker (from D2RCabbyCodes)"
+      VALUE "ProductVersion",   RC_VER_STR
+#else
       VALUE "CompanyName",      "SirCabby"
       VALUE "FileDescription",  "CabbyCodes for Diablo II: Resurrected (D2RLoader plugin)"
       VALUE "FileVersion",      RC_VER_STR
@@ -24,6 +35,7 @@ BEGIN
       VALUE "OriginalFilename", "d2rl-cabbycodes.dll"
       VALUE "ProductName",      "D2RCabbyCodes"
       VALUE "ProductVersion",   RC_VER_STR
+#endif
     END
   END
   BLOCK "VarFileInfo"

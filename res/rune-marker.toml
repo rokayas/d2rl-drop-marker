@@ -1,0 +1,60 @@
+# Rune Marker - settings.
+#
+# A cut-down build of CabbyCodes 1.4.2 (by SirCabby, GPL-3.0) that keeps one thing:
+# the runes and rare drops you choose get an icon on the map, and a line says so
+# as one drops. There are no cheats and no console command in this build.
+#
+# The easy way to change what is tracked is the menu in the game: press the menu
+# key (F7 unless changed below). The menu writes its choices into this file, in
+# place. Editing the file by hand works too - with the game closed.
+
+[rune-marker]
+
+# false: the plugin loads and does nothing at all (nothing of the game is hooked).
+enabled = true
+
+# The master switch for the icons and the messages. false: nothing is tracked.
+map_runes = true
+
+# Which runes are tracked: "all", "none", or their names apart by spaces, for
+# example "Lem Pul Um Mal Ist Gul Vex Ohm Lo Sur Ber Jah Cham Zod".
+# A tracked rune is shown the ways chosen further down (an orange rune stone on
+# the map, an orange line). A rune that is not tracked is never shown.
+runes = "all"
+
+# The other rare drops, a group each (a gold star on the map, a line in gold):
+keys = true                 # Key of Terror, Key of Hate, Key of Destruction
+organs = true               # Diablo's Horn, Baal's Eye, Mephisto's Brain
+essences = true             # Twisted, Charged, Burning and Festering Essence
+worldstone_shards = true    # Western, Eastern, Southern, Deep, Northern
+statues = true              # Talic's Anguish, Korlic's Pain, Madawc's Ire, Bul-Kathos' Nightmare, Worusk's End
+fragments = false           # Defender's Fire and Bile, Protector's Frost and Stone, Guardian's Thunder and Light
+
+# How a tracked drop is shown. Three switches, any of them on or off - the
+# menu's "Minimap icon", "Chat line" and "Pop-up on screen" boxes:
+#
+# The icon on the map, for as long as the drop lies on the ground.
+map_icons = true
+
+# The line as it drops ("Ber Rune dropped"):
+#   "chat"    a line in the game's own chat, at the lower left. Where the chat
+#             cannot be reached (a loader update changed it, say) the line is
+#             shown as a pop-up instead.
+#   "screen"  a pop-up on screen, near the top, for a few seconds.
+#   "both"    the chat line and the pop-up.
+#   "off"     neither.
+rune_message = "chat"
+
+# One line a few seconds into the first game after starting Diablo II, saying the
+# plugin is on and which key opens its menu (it goes where rune_message says).
+# false: no such line.
+greeting = true
+
+# The key that opens and closes the menu: F1 .. F12, INSERT, DELETE, HOME, END,
+# PAGEUP, PAGEDOWN, PAUSE, SCROLLLOCK, BACKQUOTE, MINUS, EQUALS.
+menu_key = "F7"
+
+# The plugin's log: d2rloader\logs\rune-marker.log
+logging = true
+# "info" (everything), "warning" or "error"
+log_level = "info"

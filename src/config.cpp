@@ -5,6 +5,8 @@
 #include <cstring>
 #include <vector>
 
+#include "track.h"
+
 namespace d2rcc::config {
 namespace {
 
@@ -162,9 +164,37 @@ std::string value_of(const Settings& s, const std::string& key) {
   if (key == "logging") return s.logging ? "true" : "false";
   if (key == "log_level") return std::string("\"") + log_level_name(s.log_level) + "\"";
   if (key == "trace") return s.trace ? "true" : "false";
+  // Local additions: the drop's message, the greeting, the menu's key and what is tracked (track.h).
+  if (key == "rune_message")
+    return s.rune_message == 0 ? "\"off\"" : s.rune_message == 2 ? "\"screen\"" : s.rune_message == 3 ? "\"both\"" : "\"chat\"";
+  if (key == "greeting") return s.greeting ? "true" : "false";
+  if (key == "menu_key") return std::string("\"") + key_name(s.toggle_key) + "\"";
+  if (key == "map_icons") return s.map_icons ? "true" : "false";
+  if (key == "runes") return std::string("\"") + track::runes_to_text(s.track_runes) + "\"";
+  for (int g = 0; g < track::kGroups; ++g)
+    if (key == track::kGroupKeys[g]) return (s.track_groups >> g) & 1 ? "true" : "false";
   return "";
 }
 
+#ifdef D2RCC_RUNES_ONLY
+// The runes-only build's table and keys (res/rune-marker.toml): what its menu changes is written back to these, a key
+// the file lacks added at the table's end. `trace` is read but not written (it is not in the shipped file).
+constexpr const char* kTableName = "rune-marker";
+const char* const kOrder[] = {"enabled",  "map_runes", "runes",        "keys",     "organs",   "essences",
+                              "worldstone_shards", "statues", "fragments", "map_icons", "rune_message", "greeting",
+                              "menu_key", "logging",  "log_level"};
+// What a key added to an older file says of itself (the shipped file has a comment above each).
+const char* added_comment(const char* key) {
+  if (!std::strcmp(key, "map_icons")) return "   # an icon on the minimap for a tracked drop (the menu's Display)";
+  if (!std::strcmp(key, "runes")) return "   # the tracked runes: \"all\", \"none\" or their names";
+  if (!std::strcmp(key, "menu_key")) return "   # the key that opens and closes the menu";
+  for (int g = 0; g < track::kGroups; ++g)
+    if (!std::strcmp(key, track::kGroupKeys[g])) return "   # tracked: this group of the other rare drops";
+  return "";
+}
+#else
+constexpr const char* kTableName = "cabbycodes";
+const char* added_comment(const char*) { return ""; }
 const char* const kOrder[] = {"enabled", "god_mode", "infinite_mana", "infinite_stamina", "exp_multiplier",
                               "move_speed_bonus", "exit_before_death", "exit_below_life_percent", "exit_method",
                               "terror_all_areas", "area_level_automap", "area_level_waypoints",
@@ -187,6 +217,7 @@ const char* const kOrder[] = {"enabled", "god_mode", "infinite_mana", "infinite_
                               "remember_automap", "remember_show_items", "remember_show_items_unfiltered",
                               "automap_was_open", "show_items_was_on", "show_items_unfiltered_was_on", "show_on_pause",
                               "toggle_key", "logging", "log_level", "trace"};
+#endif
 
 bool set_from(Settings* s, const std::string& key, const std::string& raw) {
   const std::string v = trim(raw);
@@ -313,6 +344,39 @@ bool set_from(Settings* s, const std::string& key, const std::string& raw) {
     s->toggle_key = vk;
     return true;
   }
+  // Local additions: where a rune's drop is said, and the line said as the first game of a session begins. Read only;
+  // rewrite() leaves their lines as they are.
+  if (key == "rune_message") {
+    const std::string m = unquote(v);
+    if (ieq(m, "off")) s->rune_message = 0;
+    else if (ieq(m, "chat")) s->rune_message = 1;
+    else if (ieq(m, "screen")) s->rune_message = 2;
+    else if (ieq(m, "both")) s->rune_message = 3;  // the chat line and the pop-up on screen
+    else return false;
+    return true;
+  }
+  if (key == "greeting") return parse_bool(v, &s->greeting);
+  // ... the key of the runes-only build's menu (the same field as toggle_key), and what is tracked (track.h).
+  if (key == "menu_key") {
+    const int vk = key_from_name(unquote(v).c_str());
+    if (!vk) return false;
+    s->toggle_key = vk;
+    return true;
+  }
+  if (key == "map_icons") return parse_bool(v, &s->map_icons);
+  if (key == "runes") {
+    uint64_t mask = 0;
+    if (!track::runes_from_text(unquote(v), &mask)) return false;
+    s->track_runes = mask;
+    return true;
+  }
+  for (int g = 0; g < track::kGroups; ++g) {
+    if (key != track::kGroupKeys[g]) continue;
+    bool on = false;
+    if (!parse_bool(v, &on)) return false;
+    s->track_groups = on ? s->track_groups | (1u << g) : s->track_groups & ~(1u << g);
+    return true;
+  }
   if (key == "logging") return parse_bool(v, &s->logging);
   if (key == "log_level") return log_level_from_name(unquote(v).c_str(), &s->log_level);
   if (key == "trace") return parse_bool(v, &s->trace);
@@ -352,7 +416,7 @@ int parse(const std::string& toml, Settings* out) {
   for (const std::string& line : lines_of(toml)) {
     std::string table;
     if (is_table_header(line, &table)) {
-      in_table = ieq(table, "cabbycodes");
+      in_table = ieq(table, "cabbycodes") || ieq(table, "rune-marker");  // the runes-only build's table
       continue;
     }
     if (!in_table) continue;
@@ -380,7 +444,7 @@ std::string rewrite(const std::string& toml, const Settings& s) {
         table_end = i;
         in_table = false;
       }
-      if (ieq(table, "cabbycodes")) {
+      if (ieq(table, kTableName)) {
         in_table = true;
         found_table = true;
         table_end = lines.size();
@@ -402,11 +466,13 @@ std::string rewrite(const std::string& toml, const Settings& s) {
   // Missing keys go at the end of the table (or a new table at the end).
   std::vector<std::string> extra;
   for (size_t j = 0; j < sizeof(kOrder) / sizeof(kOrder[0]); ++j)
-    if (!seen[j]) extra.push_back(std::string(kOrder[j]) + " = " + value_of(s, kOrder[j]) + (crlf ? "\r" : ""));
+    if (!seen[j])
+      extra.push_back(std::string(kOrder[j]) + " = " + value_of(s, kOrder[j]) + added_comment(kOrder[j]) +
+                      (crlf ? "\r" : ""));
   if (!extra.empty()) {
     if (!found_table) {
       if (!lines.empty() && !trim(lines.back()).empty()) lines.push_back(crlf ? "\r" : "");
-      lines.push_back(std::string("[cabbycodes]") + (crlf ? "\r" : ""));
+      lines.push_back(std::string("[") + kTableName + "]" + (crlf ? "\r" : ""));
       table_end = lines.size();
     }
     // Insert before the trailing blank lines of the table, so the next table keeps its spacing.

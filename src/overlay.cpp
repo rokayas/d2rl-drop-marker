@@ -12,6 +12,7 @@
 
 #include "backends/imgui_impl_win32.h"
 #include "character.h"
+#include "chatline.h"
 #include "cheats.h"
 #include "chronicle.h"
 #include "config.h"
@@ -27,6 +28,9 @@
 #include "remember.h"
 #include "sites.h"
 #include "terror.h"
+#include "toast.h"
+#include "track.h"
+#include "trackmenu.h"
 #include "hometown.h"
 #include "version.h"
 
@@ -150,6 +154,9 @@ void toggle(const char* how) {
   }
 }
 
+// (The runes-only build's menu - what to track, overlay.cpp's draw_panel there - is the panel here: the same key puts it
+// up and takes it down, and it gets the mouse and the keyboard the same way while it is up. Nothing is taken from the
+// game while it is down but the key itself.)
 LRESULT CALLBACK subclass_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
   // The window closed in the middle of a game (its close box, Alt+F4): the game shuts down right after, its UI last, and
   // the map's icons must not be held by then.
@@ -159,6 +166,14 @@ LRESULT CALLBACK subclass_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_P
     toggle("");
     return 0;
   }
+#ifdef D2RCC_RUNES_ONLY
+  // Esc takes the menu down, and goes no further as a key message.
+  if (msg == WM_KEYDOWN && wp == VK_ESCAPE && g_forced) {
+    InterlockedExchange(&g_forced, 0);
+    logf("menu closed by Esc");
+    return 0;
+  }
+#endif
   if (g_context_ready) {
     bool swallow = false;
     {
@@ -412,12 +427,16 @@ bool ensure_context(HWND hwnd) {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
+#ifdef D2RCC_RUNES_ONLY
+  io.IniFilename = nullptr;  // the runes-only build's menu sizes itself and keeps no layout: no file is written
+#else
   // The layout file lives beside the settings, in the loader's config folder.
   std::snprintf(g_ini_path, sizeof(g_ini_path), "%s", config_dir_utf8());
   std::strncat(g_ini_path, "cabbycodes.imgui.ini", sizeof(g_ini_path) - std::strlen(g_ini_path) - 1);
   io.IniFilename = g_ini_path[0] ? g_ini_path : nullptr;
   io.IniSavingRate = 1.0f;  // a moved, resized or collapsed panel is on disk a second later
   register_ini_handler();
+#endif
   io.ConfigWindowsMoveFromTitleBarOnly = true;
   io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
   io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
@@ -456,8 +475,26 @@ void unlock_imgui() {
   if (g_imgui_cs_ready) LeaveCriticalSection(&g_imgui_cs);
 }
 
-bool hud_wanted() { return g_context_ready && !pause_menu_open() && healthbars::take_snapshot(); }
-void draw_hud() { healthbars::draw(g_hud_font); }
+// The health bars, and the lines said on screen (toast.h, a local addition): either makes a frame. Both calls come on
+// the present thread with the ImGui lock held, so what the first found about the bars is kept for the second.
+static bool g_bars_wanted = false;
+bool hud_wanted() {
+  if (!g_context_ready || pause_menu_open()) return false;
+#ifdef D2RCC_RUNES_ONLY
+  g_bars_wanted = false;  // the runes-only build has no health bars
+#else
+  g_bars_wanted = healthbars::take_snapshot();
+#endif
+  chatline::overdue();  // a line for the chat the UI thread did not come for: on screen from here on
+  const bool said = toast::any();
+  return g_bars_wanted || said;
+}
+void draw_hud() {
+#ifndef D2RCC_RUNES_ONLY
+  if (g_bars_wanted) healthbars::draw(g_hud_font);
+#endif
+  toast::draw(g_hud_font);
+}
 
 bool visible() { return g_visible != 0; }
 void watch(ULONGLONG now) {
@@ -496,6 +533,15 @@ bool wants_draw() {
   return vis;
 }
 
+#ifdef D2RCC_RUNES_ONLY
+// The runes-only build's menu (trackmenu.cpp, a local addition): what is tracked and where a tracked drop is said. Up
+// while its key has it up; a choice holds at once, and is written to the settings file (on_setting_changed).
+void draw_panel() {
+  const trackmenu::Result r = trackmenu::draw(g_scale, config::key_name(toggle_key()));
+  if (r.closed) set_forced(false);
+  if (r.changed) changed("what is tracked", "changed");
+}
+#else
 void draw_panel() {
   const cheats::Status st = cheats::status();
   // A free-size window: drag any edge or corner; the size and position are
@@ -1073,6 +1119,7 @@ void draw_panel() {
   ImGui::PopItemWidth();
   ImGui::End();
 }
+#endif  // D2RCC_RUNES_ONLY
 
 void shutdown_imgui() {
   if (!g_context_ready) return;

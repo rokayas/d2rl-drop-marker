@@ -37,7 +37,20 @@ struct Settings {
   int map_chest_tier = 1;            // ... which: 0 super chests only, 1 all chests, 2 everything that opens for loot
   bool map_unique_items = false;     // unique items on the ground, on the automap (a gold star)
   bool map_set_items = false;        // ... set items (a green gem)
+#ifdef D2RCC_RUNES_ONLY
+  bool map_runes = true;             // the runes-only build: on unless the file says otherwise
+#else
   bool map_runes = false;            // ... runes (an orange rune stone)
+#endif
+  // Local additions (not CabbyCodes'): a rune's drop said as a line, and the line said as a session's first game begins.
+  int rune_message = 1;              // chatline.h's mode: 0 "off", 1 "chat" (the game's chat; on screen where it
+                                     // cannot be reached), 2 "screen" (a pop-up on screen), 3 "both"
+  bool greeting = true;              // one line as the first game of a session begins: the plugin is on
+  // What is tracked (track.h): the runes (bit n - 1: rune n; "runes" in the file) and the groups of the other rare
+  // drops (a bit each, in track::Group's order; a key each in the file). Not tracked: no icon, no message.
+  uint64_t track_runes = (1ull << 33) - 1;
+  uint32_t track_groups = 0x1F;      // keys, organs, essences, Worldstone Shards, statues; not the fragments
+  bool map_icons = true;             // a tracked drop gets its icon on the map (with rune_message: the menu's Display)
   bool item_level = false;           // an item's level after its name (weapons, armor, jewelry, charms, jewels)
   bool monster_health_bars = false;  // a short life bar above every enemy on screen
   bool boss_health_bar = false;      // an act boss's life at the top centre while it is near
