@@ -7,7 +7,7 @@
 // tests/test_trackmenu.cpp can draw it and click it without the game.
 namespace d2rcc::trackmenu {
 
-inline constexpr const char* kTitle = "Rune Marker - what to track";
+inline constexpr const char* kTitle = "Drop Marker - what to track";
 
 struct Result {
   bool changed = false;  // a choice was changed in this frame: it holds already, the caller has it saved

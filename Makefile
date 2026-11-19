@@ -14,10 +14,11 @@ CC  := x86_64-w64-mingw32-gcc
 RC  := x86_64-w64-mingw32-windres
 
 PROJECT   := D2RCabbyCodes
-# RUNES_ONLY=1 (a local addition, not upstream's): the cut-down build. It keeps the rune marks on the map and the
-# line said as a rune drops, and is a plugin of its own - d2rl-rune-marker.dll, id "rune-marker", with its own
-# settings file and log. The modules of everything else are left out of it (LEAN_OUT below), and D2RCC_RUNES_ONLY
-# takes the panel, the key, the console command and every other hook out of what remains.
+# RUNES_ONLY=1 (not SirCabby's: added in this fork): the cut-down build, published as "Drop Marker". It keeps the
+# marks on the map for the drops the player tracks and the line said as one drops, and is a plugin of its own -
+# d2rl-rune-marker.dll, id "rune-marker", with its own settings file and log. The modules of everything else are
+# left out of it (LEAN_OUT below), and D2RCC_RUNES_ONLY takes the panel, the console command and every other hook
+# out of what remains.
 #   make RUNES_ONLY=1        ->  build/runes/d2rl-rune-marker.dll
 RUNES_ONLY ?= 0
 PLUGIN_ID := $(if $(filter 1,$(RUNES_ONLY)),rune-marker,cabbycodes)
@@ -27,6 +28,14 @@ MOD_NAME  ?= D2RMM
 
 # VERSION holds the single source of truth. Change it with `make version X.Y.Z`.
 VERSION   := $(shell cat VERSION 2>/dev/null || echo 0.0.0)
+# Drop Marker has a version of its own, in VERSION.drop-marker. The CabbyCodes version it was made from (VERSION)
+# is compiled into both builds as D2RCC_BASE_VERSION, for the log.
+BASE_VERSION := $(VERSION)
+VERSION_FILES := VERSION
+ifeq ($(RUNES_ONLY),1)
+VERSION := $(shell cat VERSION.drop-marker 2>/dev/null || echo 0.0.0)
+VERSION_FILES += VERSION.drop-marker
+endif
 VER_PARTS := $(subst ., ,$(VERSION))
 VER_MAJOR := $(word 1,$(VER_PARTS))
 VER_MINOR := $(word 2,$(VER_PARTS))
@@ -119,10 +128,10 @@ $(TARGET): $(OBJS) | $(BUILD)
 
 # Rebuild the mod's own objects when the version changes (the vendored ImGui and
 # MinHook objects do not use it, so they are left alone).
-$(MOD_OBJS): VERSION
+$(MOD_OBJS): $(VERSION_FILES)
 
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) -DD2RCC_VERSION='"$(VERSION)"' -c $< -o $@
+	$(CXX) $(CXXFLAGS) -DD2RCC_VERSION='"$(VERSION)"' -DD2RCC_BASE_VERSION='"$(BASE_VERSION)"' -c $< -o $@
 
 $(BUILD)/imgui/%.o: $(IMGUI_DIR)/%.cpp | $(BUILD)
 	@mkdir -p $(dir $@)
@@ -141,7 +150,7 @@ $(BUILD)/res/version.o: $(BUILD)/res/version_gen.h
 
 # The version resource reads its numbers from a header the build writes: windres
 # mangles quoted -D values, a generated file does not.
-$(BUILD)/res/version_gen.h: VERSION | $(BUILD)
+$(BUILD)/res/version_gen.h: $(VERSION_FILES) | $(BUILD)
 	@mkdir -p $(dir $@)
 	@printf '#define RC_VER_MAJOR %s\n#define RC_VER_MINOR %s\n#define RC_VER_PATCH %s\n#define RC_VER_STR "%s"\n' \
 	  '$(VER_MAJOR)' '$(VER_MINOR)' '$(VER_PATCH)' '$(VERSION)' > $@

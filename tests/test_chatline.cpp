@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
 
   std::printf("8. a line with a delay (the greeting)\n");
   reset();
-  chatline::announce("Rune Marker is on", chatline::kGold, 300);
+  chatline::announce("Drop Marker is on", chatline::kGold, 300);
   chatline::on_ui();
   chatline::overdue();
   check(g_pushed.empty() && g_screen.empty(), "not said before its time");

@@ -179,7 +179,7 @@ const char* bind_affixes() {
                   : !has_tables()             ? "the game's monster mod table is unavailable"
                                               : nullptr;
   // The placeholder kept in a list that would be empty must have no maker on the server (the client's side, its event
-  // routines and its text are the record's: CLAUDE.md, monster mods).
+  // routines and its text are the record's: the original project's notes, monster mods).
   // The client's handler table, when its mod loop is found, must have none for it either.
   uintptr_t maker = 1, handler = 0;
   const uintptr_t makers = sites::monster_mod_makers(), handlers = sites::client_mod_handlers();

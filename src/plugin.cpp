@@ -55,24 +55,23 @@ namespace d2rcc {
 namespace {
 
 #ifdef D2RCC_RUNES_ONLY
-// The runes-only build, a local cut-down of CabbyCodes: a plugin of its own, with its own settings file and log
-// (rune-marker.toml, rune-marker.log). It has the marks of the runes and rare drops the user tracks, the line said as
-// one drops, and a menu to choose them (overlay.cpp's draw_panel there) - nothing else.
-#define D2RCC_PRODUCT "Rune Marker"
-// Which local build this is, for the log (the version stays CabbyCodes' own): 1 the rune marks and the chat line,
-// 2 the menu, the choice of runes and the other rare drops, 3 the three ways a drop is shown, each a switch.
-#define D2RCC_LOCAL_BUILD "3"
+// The runes-only build, published as Drop Marker: a cut-down of CabbyCodes and a plugin of its own, with its own
+// settings file and log (rune-marker.toml, rune-marker.log - the id is from its first name, Rune Marker, and stays so
+// that settings carry over). It has the marks of the runes and rare drops the user tracks, the line said as one
+// drops, and a menu to choose them (overlay.cpp's draw_panel there) - nothing else.
+// Its version is its own (VERSION.drop-marker); D2RCC_BASE_VERSION is the CabbyCodes version it was made from.
+#define D2RCC_PRODUCT "Drop Marker"
 constexpr D2RL::PluginInfo kInfo{
     .infoSize = D2RL::PluginInfoSize,
     .abiVersion = D2RL_PLUGIN_ABI_VERSION,
     .id = "rune-marker",
-    .name = "Rune Marker",
+    .name = "Drop Marker",
     .version = D2RCC_VERSION,
-    .author = "SirCabby (CabbyCodes), cut down locally",
+    .author = "rokayas (from CabbyCodes by SirCabby)",
     .description = "The runes and rare drops you choose - keys, organs, essences, Worldstone Shards, the Ancients' "
                    "statues - get an icon on the map and a line in the chat as they drop. One small menu (F7) picks "
-                   "what is tracked. No cheats, no console command. A cut-down build of CabbyCodes (GPL-3.0) for "
-                   "offline play.",
+                   "what is tracked. No cheats, no console command. A cut-down build of CabbyCodes by SirCabby "
+                   "(GPL-3.0) for offline play.",
     .flags = D2RL::PluginFlags::Shared | D2RL::PluginFlags::NativeHooks,
 };
 #else
@@ -1396,11 +1395,10 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* ctx) noex
     LogAlways always;
 #ifdef D2RCC_RUNES_ONLY
     if (!g_settings.logging)
-      logf(D2RCC_PRODUCT " (CabbyCodes v%s, cut down): the log is off (logging = false in rune-marker.toml)",
-           D2RCC_VERSION);
+      logf(D2RCC_PRODUCT " v%s: the log is off (logging = false in rune-marker.toml)", D2RCC_VERSION);
     else
-      logf(D2RCC_PRODUCT " (CabbyCodes v%s, cut down): the log takes %s (log_level = \"%s\" in rune-marker.toml)",
-           D2RCC_VERSION, level_words(g_settings.log_level), config::log_level_name(g_settings.log_level));
+      logf(D2RCC_PRODUCT " v%s: the log takes %s (log_level = \"%s\" in rune-marker.toml)", D2RCC_VERSION,
+           level_words(g_settings.log_level), config::log_level_name(g_settings.log_level));
 #else
     if (!g_settings.logging)
       logf("CabbyCodes v%s: the log is off (logging = false) - nothing is written but what is asked for by name; "
@@ -1414,9 +1412,9 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* ctx) noex
   }
 
 #ifdef D2RCC_RUNES_ONLY
-  logf(D2RCC_PRODUCT " local build " D2RCC_LOCAL_BUILD " (CabbyCodes v%s cut down to its marks for runes and rare "
-       "drops: one small menu, no console command, no cheats) loading: ABI %u, scope %s, exe base 0x%llX, build '%s' "
-       "(%s), mod '%s'",
+  logf(D2RCC_PRODUCT " v%s (CabbyCodes v" D2RCC_BASE_VERSION " cut down to its marks for runes and rare drops: one "
+       "small menu, no console command, no cheats) loading: ABI %u, scope %s, exe base 0x%llX, build '%s' (%s), mod "
+       "'%s'",
        D2RCC_VERSION, ctx->abiVersion, scope_name(ctx->loadScope), static_cast<unsigned long long>(ctx->exeBase),
        ctx->buildVersion ? ctx->buildVersion : "?", ctx->buildName ? ctx->buildName : "?",
        ctx->activeMod ? ctx->activeMod : "");

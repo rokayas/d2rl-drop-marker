@@ -15,7 +15,7 @@ FILE: a shared stash (.d2i: sections of a 64-byte header, "JM", a count, the ite
 files that are only read for the seeds they hold, so that no new seed is one of theirs. --excel is the folder of the
 game's tables as text (the default: the loader's copies under GAME_DIR of config.mk, the rotw bank).
 
-What is compared (src/itemseed.h has the rule, CLAUDE.md "Item seeds" the record). A save keeps one seed with an
+What is compared (src/itemseed.h has the rule, the original project's notes the record). A save keeps one seed with an
 item, the unit's (32 bits after the count of socketed items); a compact item (potions, runes, gems) has none. At
 an item's creation item init (0x43EF10) rolls on that seed's stream, in this order:
   armor     the durability (half the base's plus a roll of that half), then the base defense (minac plus a roll
