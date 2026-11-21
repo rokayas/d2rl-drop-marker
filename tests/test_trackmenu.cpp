@@ -5,7 +5,7 @@
 //
 // Built by hand (Dear ImGui compiled with its test hooks, so not one of `make test`'s):
 //   g++ -std=c++20 -O2 -DIMGUI_ENABLE_TEST_ENGINE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -Isrc -Icontrib/imgui -static
-//       -o tests/build/test_trackmenu.exe tests/test_trackmenu.cpp src/trackmenu.cpp src/track.cpp
+//       -o tests/build/test_trackmenu.exe tests/test_trackmenu.cpp src/trackmenu.cpp src/track.cpp src/named.cpp
 //       contrib/imgui/imgui.cpp contrib/imgui/imgui_draw.cpp contrib/imgui/imgui_tables.cpp
 //       contrib/imgui/imgui_widgets.cpp
 //   test_trackmenu.exe [folder for the pictures] [screen width] [screen height]
@@ -519,6 +519,71 @@ int main(int argc, char** argv) {
   shoot(folder, "6-chat-out-of-reach");
   g_chat_ok = true;
   frame();
+
+  std::printf("5b. the unique and set items\n");
+  const auto entry_named = [](named::Kind kind, const char* english) {
+    for (int i = 0; i < named::entries(kind); ++i)
+      if (std::strcmp(named::entry(kind, i).item->english, english) == 0) return i;
+    return -1;
+  };
+  const auto type = [&](const char* text) {
+    io.AddInputCharactersUTF8(text);
+    frame();
+    frame();
+  };
+  seen();
+  check(!track::any_named() && !find("##track_set_0", &bb) && !find("##track_unique_0", &bb),
+        "none is chosen to begin with, and both sections are closed: no list in the menu");
+  shoot(folder, "10-sections-closed");
+  check(click_id("###named_set"), "the set items' line opens its section");
+  frame();
+  const int ward = entry_named(named::kSetItem, "Civerb's Cudgel"), guard = entry_named(named::kSetItem, "Tal Rasha's Guardianship");
+  char first_track[48], first_pillar[48];
+  std::snprintf(first_track, sizeof(first_track), "##track_set_%d", ward);
+  std::snprintf(first_pillar, sizeof(first_pillar), "##pillar_set_%d", ward);
+  check(ward >= 0 && guard >= 0 && find(first_track, &bb) && find("##search_set", &bb), "the list and the search box are there");
+  check(!find("Ber", &bb), "the runes' part folded as this one opened");
+  check(click(first_track) && track::named(named::kSetItem, ward) && !track::named_pillar(named::kSetItem, ward) && seen().changed,
+        "a tick on the first item tracks it, and it alone");
+  check(click(first_pillar) && track::named_pillar(named::kSetItem, ward) && track::any_pillars(), "its second tick gives it a pillar");
+  check(click("##track_set_group_0") && track::named_tracked(named::kSetItem).count() == 3, "the set's own tick tracks its three items");
+  check(click("##track_set_group_0") && track::named_tracked(named::kSetItem).count() == 0, "... and takes them out again");
+  shoot(folder, "11-set-items-open");
+  check(click("##search_set"), "the search box takes a click");
+  type("tal r");
+  check(!find(first_track, &bb), "\"tal r\" typed: the first set is no longer listed");
+  char tick[48];
+  std::snprintf(tick, sizeof(tick), "##track_set_%d", guard);
+  check(find(tick, &bb), "... and Tal Rasha's Guardianship is");
+  check(click("All shown##track_set") && track::named_tracked(named::kSetItem).count() == 5 && track::named(named::kSetItem, guard),
+        "\"All shown\" tracks the five items of Tal Rasha's Wrappings and nothing else");
+  check(click("None shown##pillar_set") && track::named_pillar(named::kSetItem, ward), "\"None shown\" leaves what is not shown as it is");
+  shoot(folder, "12-set-items-search");
+  check(click("Clear##search_set") && find(first_track, &bb), "Clear brings the whole list back");
+  check(click_id("###named_set") && !find(first_track, &bb), "the line closes its section again");
+  check(click_id("###named_unique") && find("##search_unique", &bb), "the unique items' line opens theirs");
+  frame();
+  shoot(folder, "13-unique-items-open");
+  check(click("##search_unique"), "its search box takes a click");
+  type("griff");
+  const int eye = entry_named(named::kUnique, "Griffon's Eye");
+  std::snprintf(tick, sizeof(tick), "##pillar_unique_%d", eye);
+  check(eye >= 0 && click(tick) && track::named_pillar(named::kUnique, eye) && !track::named(named::kUnique, eye),
+        "\"griff\" typed: Griffon's Eye is there to be given a pillar without being tracked");
+  check(click("Clear##search_unique") && click("##search_unique"), "the search cleared and clicked again");
+  type("ring");
+  check(click("All shown##track_unique") && track::named(named::kUnique, entry_named(named::kUnique, "The Stone of Jordan")) &&
+            !track::named(named::kUnique, eye),
+        "\"ring\" typed and \"All shown\": the rings are tracked (a kind's name is searched too)");
+  shoot(folder, "14-unique-items-search");
+  const int facet = entry_named(named::kUnique, "Rainbow Facet");
+  check(facet >= 0 && named::entry_of(named::kUnique, 392) == facet && named::entry_of(named::kUnique, 399) == facet,
+        "the eight Rainbow Facets are one entry");
+  check(click("Clear##search_unique") && click_id("###part_runes") && find("Ber", &bb) && !find("##search_unique", &bb),
+        "cleared; the runes' line opens its part again and folds this one");
+  track::init_named(named::kUnique, named::Mask{}, named::Mask{});
+  track::init_named(named::kSetItem, named::Mask{}, named::Mask{});
+  seen();
 
   std::printf("6. taking it down\n");
   seen();

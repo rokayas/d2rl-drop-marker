@@ -4,6 +4,8 @@
 #include <cstring>
 #include <string>
 
+#include "named.h"
+
 // What the plugin tracks (a local addition, not CabbyCodes' own): which of the 33 runes, and which groups of the other
 // rare drops (the Pandemonium keys and organs, the essences, the Worldstone Shards, the Ancients' statues and
 // fragments). Chosen in the plugin's menu, kept in the settings file, and asked by the map's marks and the drop
@@ -188,6 +190,21 @@ bool pillar_rune(int number);  // 1 .. 33; any other number: no pillar (the menu
 void set_pillar_runes(uint64_t mask);
 bool pillar_group(int g);
 void set_pillar_group(int g, bool on);
-bool any_pillars();  // some rune or group has one
+bool any_pillars();  // some rune, group, unique item or set item has one
+
+// --- the unique and set items (named.h) ------------------------------------------------------------------------------
+// Chosen one by one in the menu, each with the same two ticks as a rune: tracked, and a light pillar. `kind`:
+// named::kUnique or named::kSetItem; `entry`: the item's entry there. None is chosen unless the settings say so.
+// The settings file's keys, a choice each as named::to_text writes it ("none", "all" or names apart by semicolons).
+constexpr const char* kNamedKeys[named::kKinds] = {"unique_items", "set_items"};
+constexpr const char* kNamedPillarKeys[named::kKinds] = {"pillar_unique_items", "pillar_set_items"};
+void init_named(int kind, const named::Mask& tracked, const named::Mask& pillars);
+named::Mask named_tracked(int kind);
+named::Mask named_pillars(int kind);
+void set_named_tracked(int kind, const named::Mask& mask);
+void set_named_pillars(int kind, const named::Mask& mask);
+bool named(int kind, int entry);         // tracked
+bool named_pillar(int kind, int entry);  // has a pillar
+bool any_named();                        // some unique or set item is tracked or has a pillar
 
 }  // namespace d2rcc::track

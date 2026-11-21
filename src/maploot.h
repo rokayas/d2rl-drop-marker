@@ -263,13 +263,16 @@ struct ServerItem {
   ItemKind kind = kItemNone;
   int32_t px = 0, py = 0;
   uint32_t cls = UINT32_MAX;  // its Items row (a local addition: the rune drop message names the rune)
+  int32_t named = -1;         // a unique or set item's file index (its row in the game's table of them)
 };
 // The items on the ground of a server unit, if it is one the switches can show (else kItemNone).
 ItemKind ground_item_kind(Unit* item);
 // A local addition (the light pillars, pillars.h). An item unit lying on the ground that is a rune or one of track.h's
 // other rare drops: which of the two (else kItemNone), a rune's number (0: none of r01 .. r33) and another drop's group
-// (-1: a rune). The client's units or the server's, any thread: the tables are only read once they are ready.
-ItemKind ground_drop(Unit* item, int* rune_number, int* group);
+// (-1: a rune). A unique or set item the menu lists (named.h) is kItemUnique or kItemSet with its entry there in
+// *entry (-1 for the others). The client's units or the server's, any thread: the tables are only read once they
+// are ready.
+ItemKind ground_drop(Unit* item, int* rune_number, int* group, int* entry);
 // The items of the rooms read (`rooms`: the area's built rooms, whose units these are): the area's earlier marks in those
 // rooms that are not among them go; those in other rooms stay (the server let those rooms go, the items saved with them).
 int items_found(uint8_t bank, int level, const ServerItem* items, size_t count,

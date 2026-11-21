@@ -72,6 +72,45 @@ void set_pillar_group(int g, bool on) {
   else InterlockedAnd(&g_pillar_groups, ~bit);
 }
 
-bool any_pillars() { return pillar_runes() != 0 || pillar_groups() != 0; }
+// --- the unique and set items ---------------------------------------------------------------------------------------
+namespace {
+// [kind][0 tracked, 1 with a pillar]: a word at a time, each read and written whole.
+volatile LONG64 g_named[named::kKinds][2][named::kWords] = {};
+
+named::Mask named_get(int kind, int which) {
+  named::Mask m;
+  if (kind < 0 || kind >= named::kKinds) return m;
+  for (int i = 0; i < named::kWords; ++i) m.w[i] = static_cast<uint64_t>(g_named[kind][which][i]);
+  return m;
+}
+void named_put(int kind, int which, const named::Mask& m) {
+  if (kind < 0 || kind >= named::kKinds) return;
+  for (int i = 0; i < named::kWords; ++i) InterlockedExchange64(&g_named[kind][which][i], static_cast<LONG64>(m.w[i]));
+}
+bool named_bit(int kind, int which, int entry) {
+  if (kind < 0 || kind >= named::kKinds || entry < 0 || entry >= named::kMaxEntries) return false;
+  return ((static_cast<uint64_t>(g_named[kind][which][entry >> 6]) >> (entry & 63)) & 1) != 0;
+}
+bool named_any(int which) {
+  for (int kind = 0; kind < named::kKinds; ++kind)
+    for (int i = 0; i < named::kWords; ++i)
+      if (g_named[kind][which][i]) return true;
+  return false;
+}
+}  // namespace
+
+void init_named(int kind, const named::Mask& tracked, const named::Mask& pillars) {
+  named_put(kind, 0, tracked);
+  named_put(kind, 1, pillars);
+}
+named::Mask named_tracked(int kind) { return named_get(kind, 0); }
+named::Mask named_pillars(int kind) { return named_get(kind, 1); }
+void set_named_tracked(int kind, const named::Mask& mask) { named_put(kind, 0, mask); }
+void set_named_pillars(int kind, const named::Mask& mask) { named_put(kind, 1, mask); }
+bool named(int kind, int entry) { return named_bit(kind, 0, entry); }
+bool named_pillar(int kind, int entry) { return named_bit(kind, 1, entry); }
+bool any_named() { return named_any(0) || named_any(1); }
+
+bool any_pillars() { return pillar_runes() != 0 || pillar_groups() != 0 || named_any(1); }
 
 }  // namespace d2rcc::track

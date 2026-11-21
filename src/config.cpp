@@ -176,6 +176,11 @@ std::string value_of(const Settings& s, const std::string& key) {
   if (key == track::kPillarRunesKey) return std::string("\"") + track::runes_to_text(s.pillar_runes) + "\"";
   for (int g = 0; g < track::kGroups; ++g)
     if (key == track::kPillarGroupKeys[g]) return (s.pillar_groups >> g) & 1 ? "true" : "false";
+  for (int k = 0; k < named::kKinds; ++k) {
+    const auto kind = static_cast<named::Kind>(k);
+    if (key == track::kNamedKeys[k]) return std::string("\"") + named::to_text(kind, s.track_named[k]) + "\"";
+    if (key == track::kNamedPillarKeys[k]) return std::string("\"") + named::to_text(kind, s.pillar_named[k]) + "\"";
+  }
   return "";
 }
 
@@ -187,6 +192,7 @@ const char* const kOrder[] = {"enabled",  "map_runes", "runes",        "keys",  
                               "worldstone_shards", "statues", "fragments", "map_icons", "rune_message", "greeting",
                               "pillar_runes", "pillar_keys", "pillar_organs", "pillar_essences",
                               "pillar_worldstone_shards", "pillar_statues", "pillar_fragments",
+                              "unique_items", "pillar_unique_items", "set_items", "pillar_set_items",
                               "menu_key", "logging",  "log_level"};
 // What a key added to an older file says of itself (the shipped file has a comment above each).
 const char* added_comment(const char* key) {
@@ -199,6 +205,10 @@ const char* added_comment(const char* key) {
     return "   # the runes with a pillar of light on the ground: \"all\", \"none\" or their names";
   for (int g = 0; g < track::kGroups; ++g)
     if (!std::strcmp(key, track::kPillarGroupKeys[g])) return "   # a pillar of light on this group's drops";
+  if (!std::strcmp(key, "unique_items")) return "   # the tracked unique items: \"none\", \"all\" or their names apart by semicolons";
+  if (!std::strcmp(key, "set_items")) return "   # the tracked set items, written the same way";
+  if (!std::strcmp(key, "pillar_unique_items")) return "   # the unique items with a pillar of light";
+  if (!std::strcmp(key, "pillar_set_items")) return "   # the set items with a pillar of light";
   return "";
 }
 #else
@@ -399,6 +409,19 @@ bool set_from(Settings* s, const std::string& key, const std::string& raw) {
     if (!parse_bool(v, &on)) return false;
     s->pillar_groups = on ? s->pillar_groups | (1u << g) : s->pillar_groups & ~(1u << g);
     return true;
+  }
+  // ... and the unique and set items (named.h). A name the list does not have (another version's, a typing slip) is
+  // left out; the others hold.
+  for (int k = 0; k < named::kKinds; ++k) {
+    const auto kind = static_cast<named::Kind>(k);
+    if (key == track::kNamedKeys[k]) {
+      s->track_named[k] = named::from_text(kind, unquote(v));
+      return true;
+    }
+    if (key == track::kNamedPillarKeys[k]) {
+      s->pillar_named[k] = named::from_text(kind, unquote(v));
+      return true;
+    }
   }
   if (key == "logging") return parse_bool(v, &s->logging);
   if (key == "log_level") return log_level_from_name(unquote(v).c_str(), &s->log_level);

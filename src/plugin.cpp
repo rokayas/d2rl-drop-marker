@@ -168,6 +168,10 @@ void read_settings() {
   lean.map_icons = g_settings.map_icons;
   lean.pillar_runes = g_settings.pillar_runes;
   lean.pillar_groups = g_settings.pillar_groups;
+  for (int k = 0; k < named::kKinds; ++k) {
+    lean.track_named[k] = g_settings.track_named[k];
+    lean.pillar_named[k] = g_settings.pillar_named[k];
+  }
   lean.toggle_key = g_settings.toggle_key;  // the menu's key (menu_key in the file)
   lean.logging = g_settings.logging;
   lean.log_level = g_settings.log_level;
@@ -200,6 +204,11 @@ void log_settings() {
       at += static_cast<size_t>(std::snprintf(lit + at, sizeof(lit) - at, "%s%s", at ? ", " : "", track::kGroupNames[g]));
   logf("settings: a light pillar on the runes: %s; on the other drops: %s",
        track::runes_to_text(g_settings.pillar_runes).c_str(), lit[0] ? lit : "none");
+  logf("settings: unique items: %d of %d tracked, %d with a light pillar; set items: %d of %d tracked, %d with a light "
+       "pillar",
+       g_settings.track_named[named::kUnique].count(), named::entries(named::kUnique),
+       g_settings.pillar_named[named::kUnique].count(), g_settings.track_named[named::kSetItem].count(),
+       named::entries(named::kSetItem), g_settings.pillar_named[named::kSetItem].count());
 }
 #else
 void log_settings() {
@@ -277,14 +286,20 @@ void save_settings() {
   g_settings.map_icons = track::icons();
   g_settings.pillar_runes = track::pillar_runes();
   g_settings.pillar_groups = track::pillar_groups();
+  for (int k = 0; k < named::kKinds; ++k) {
+    g_settings.track_named[k] = track::named_tracked(k);
+    g_settings.pillar_named[k] = track::named_pillars(k);
+  }
   g_settings.rune_message = chatline::mode();
   const std::string text = config::rewrite(read_config_text(), g_settings);
   if (ctx->WriteConfig(text.c_str()))
     logf("settings: written (%zu bytes); shown as: minimap icon=%d, chat line=%d, pop-up=%d; runes tracked: %s; runes "
-         "with a light pillar: %s",
+         "with a light pillar: %s; unique items tracked %d, with a pillar %d; set items tracked %d, with a pillar %d",
          text.size(), g_settings.map_icons, (g_settings.rune_message & chatline::kChat) != 0,
          (g_settings.rune_message & chatline::kScreen) != 0, track::runes_to_text(g_settings.track_runes).c_str(),
-         track::runes_to_text(g_settings.pillar_runes).c_str());
+         track::runes_to_text(g_settings.pillar_runes).c_str(), g_settings.track_named[named::kUnique].count(),
+         g_settings.pillar_named[named::kUnique].count(), g_settings.track_named[named::kSetItem].count(),
+         g_settings.pillar_named[named::kSetItem].count());
   else
     log_warn("settings: the loader refused to write the file - the menu's choices hold until the game is closed");
 }
@@ -1482,6 +1497,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* ctx) noex
   chatline::set_mode(g_settings.rune_message);
   track::init(g_settings.track_runes, g_settings.track_groups, g_settings.map_icons);
   track::init_pillars(g_settings.pillar_runes, g_settings.pillar_groups);
+  for (int k = 0; k < named::kKinds; ++k) track::init_named(k, g_settings.track_named[k], g_settings.pillar_named[k]);
 #ifdef D2RCC_RUNES_ONLY
   if (!g_settings.enabled) {
     logf("settings: enabled = false - the plugin stays idle (nothing of the game is hooked)");

@@ -68,6 +68,20 @@ pillar_worldstone_shards = false
 pillar_statues = false
 pillar_fragments = false
 
+# --- Unique and set items --------------------------------------------------
+# Chosen one by one in the menu (its "Unique items" and "Set items" parts: a
+# search box and a list). A chosen item is said by its own name as it drops,
+# before it is identified: "Harlequin Crest dropped".
+# Each line: "none", "all", or the items' English names apart by semicolons,
+# for example  "Harlequin Crest; Griffon's Eye; The Stone of Jordan".
+# The tracked ones (icon and message, as chosen at the top):
+unique_items = "none"
+set_items = "none"
+# ... and the ones with a pillar of light (a unique item's is gold, a set
+# item's green):
+pillar_unique_items = "none"
+pillar_set_items = "none"
+
 # The key that opens and closes the menu: F1 .. F12, INSERT, DELETE, HOME, END,
 # PAGEUP, PAGEDOWN, PAUSE, SCROLLLOCK, BACKQUOTE, MINUS, EQUALS.
 menu_key = "F7"

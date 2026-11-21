@@ -17,6 +17,7 @@ struct Color {
 // A rune's pillar in the game's rune orange, another rare drop's in gold (the colours of their marks on the map).
 constexpr Color kRuneColor{255, 150, 30};
 constexpr Color kOtherColor{255, 214, 110};
+constexpr Color kSetColor{70, 235, 90};
 
 // What a beam is made of, in pixels of a screen 1080 lines high (everything scales with the screen's height).
 constexpr float kHeight = 340.0f;     // from its foot to where it has faded away

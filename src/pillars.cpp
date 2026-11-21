@@ -41,8 +41,9 @@ struct Snapshot {
 struct Known {
   uint32_t id = 0;
   uint8_t kind = 0;
-  int8_t rune = 0;    // its number, 1 .. 33
-  int8_t group = -1;  // ... or its group
+  int8_t rune = 0;     // its number, 1 .. 33
+  int8_t group = -1;   // ... or its group
+  int16_t entry = -1;  // ... or, a unique or set item, its entry in the menu's list (named.h)
 };
 
 volatile LONG g_bound = 0;
@@ -67,7 +68,11 @@ bool g_said_no_point = false, g_said_full = false;
 // The present thread only.
 Snapshot g_view;
 
-bool chosen(int rune, int group) { return group >= 0 ? track::pillar_group(group) : track::pillar_rune(rune); }
+bool chosen(int kind, int rune, int group, int entry) {
+  if (kind == maploot::kItemUnique) return track::named_pillar(named::kUnique, entry);
+  if (kind == maploot::kItemSet) return track::named_pillar(named::kSetItem, entry);
+  return group >= 0 ? track::pillar_group(group) : track::pillar_rune(rune);
+}
 
 void publish(const Snapshot& s, uint64_t now) {
   EnterCriticalSection(&g_cs);
@@ -85,9 +90,9 @@ void scan() {
   g_known_count = 0;
   const size_t n = game::client_units(game::kItem, g_units, kMaxUnits);
   for (size_t i = 0; i < n; ++i) {
-    int rune = 0, group = -1;
-    const maploot::ItemKind kind = maploot::ground_drop(g_units[i], &rune, &group);
-    if (kind == maploot::kItemNone || !chosen(rune, group)) continue;
+    int rune = 0, group = -1, entry = -1;
+    const maploot::ItemKind kind = maploot::ground_drop(g_units[i], &rune, &group, &entry);
+    if (kind == maploot::kItemNone || !chosen(kind, rune, group, entry)) continue;
     if (g_known_count == kMaxPillars) {
       if (!g_said_full) {
         g_said_full = true;
@@ -100,6 +105,7 @@ void scan() {
     k.kind = static_cast<uint8_t>(kind);
     k.rune = static_cast<int8_t>(rune);
     k.group = static_cast<int8_t>(group);
+    k.entry = static_cast<int16_t>(entry);
   }
 }
 
@@ -160,7 +166,7 @@ void collect(uint64_t now) {
   for (int i = 0; i < g_known_count; ++i) {
     const Known& k = g_known[i];
     // Still there, and still chosen: a tick taken off in the menu, or the item picked up, takes its pillar away at once.
-    if (!chosen(k.rune, k.group)) continue;
+    if (!chosen(k.kind, k.rune, k.group, k.entry)) continue;
     Unit* u = game::client_unit(k.id, game::kItem);
     if (!u || !maploot::on_ground(game::unit_mode(u))) continue;
     Pillar& p = s.pillar[s.count];
@@ -179,7 +185,9 @@ void collect(uint64_t now) {
     if (g_logged < kLogFirst) {
       ++g_logged;
       logf("light pillars: a pillar on a %s (item %u) at %.0f, %.0f of %d x %d projected pixels%s",
-           k.kind == maploot::kItemRune ? "rune" : "rare drop", k.id, p.x, p.y, s.render_w, s.render_h,
+           k.kind == maploot::kItemRune ? "rune" : k.kind == maploot::kItemUnique ? "unique item"
+                                                 : k.kind == maploot::kItemSet ? "set item" : "rare drop",
+           k.id, p.x, p.y, s.render_w, s.render_h,
            g_logged == kLogFirst ? "  (not logged again in this game)" : "");
     }
   }
@@ -225,7 +233,11 @@ void draw() {
     if (x < -reach || x > size.x + reach || y < 0.0f || y > size.y + height) continue;
     // An open inventory or character panel covers its half of the screen.
     if (s.side == 3 || (s.side == 1 && x >= half) || (s.side == 2 && x < half)) continue;
-    const pillarart::Color c = p.kind == maploot::kItemRune ? pillarart::kRuneColor : pillarart::kOtherColor;
+    // A rune's pillar is the runes' orange, a set item's the green the game writes set items in; a unique item's and
+    // the other rare drops' are gold.
+    const pillarart::Color c = p.kind == maploot::kItemRune  ? pillarart::kRuneColor
+                               : p.kind == maploot::kItemSet ? pillarart::kSetColor
+                                                             : pillarart::kOtherColor;
     pillarart::beam(dl, x, y, unit, c, seconds + static_cast<double>(p.id % 97u) * 0.173);
   }
 }

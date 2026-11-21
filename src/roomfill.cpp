@@ -155,7 +155,9 @@ int units_of(void* level, const Found& want) {
       } else if (want.items && type == game::kItem) {
         if (const maploot::ItemKind kind = maploot::ground_item_kind(u);
             kind != maploot::kItemNone && game::unit_pixels(u, &px, &py))
-          want.items->push_back(maploot::ServerItem{game::unit_id(u), kind, px, py, game::unit_class(u)});
+          want.items->push_back(maploot::ServerItem{
+              game::unit_id(u), kind, px, py, game::unit_class(u),
+              kind == maploot::kItemUnique || kind == maploot::kItemSet ? game::item_file_index(u) : -1});
       }
       unit = mem::read_ptr(unit + static_cast<uintptr_t>(f.unit_next_at));
     }

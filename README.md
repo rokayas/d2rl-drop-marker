@@ -3,8 +3,8 @@
 A [D2RLoader](https://d2rloader.net) plugin for Diablo II: Resurrected that tells you when something you care
 about drops, and where it is.
 
-You choose what counts: any of the 33 runes, and keys, organs, essences, Worldstone Shards and the Ancients'
-statues. When one of those drops it gets
+You choose what counts: any of the 33 runes; keys, organs, essences, Worldstone Shards and the Ancients'
+statues; and, since 1.6, any of the game's unique and set items, one by one. When one of those drops it gets
 
 - an **icon on the minimap** for as long as it lies on the ground,
 - a **line in the game's chat** ("Ber Rune dropped"), and/or
@@ -20,6 +20,8 @@ runes only, say. Anything you neither track nor give a pillar is never shown. Th
 cheats, no console command, nothing about the game's rules is changed.
 
 ![The menu](docs/menu.png)
+
+![The unique items, searched for "ring"](docs/menu-unique-items.png)
 
 Drop Marker is a cut-down build of [CabbyCodes](https://github.com/SirCabby/D2RCabbyCodes) by SirCabby, with a
 drop message and a menu added. See [Where it comes from](#where-it-comes-from).
@@ -51,13 +53,27 @@ Press **F7** in a game. The menu has
 The two are apart: a rune can be tracked without a pillar, or have a pillar without being tracked. As
 installed, everything but the fragments is tracked, and Vex and every higher rune has a pillar.
 
+The menu has three parts, each a line that folds out, one open at a time: the runes and other drops (open as
+the menu comes up), **Unique items** and **Set items**. Those two are lists too long for tick boxes side by
+side - 396 unique items and 140 set items - so each is a **search box** over a list that scrolls:
+
+- type part of a name ("griff", "tal r"), or a kind or a set ("ring", "sword", "immortal");
+- every item has the same two boxes, Track and Pillar; the row of a kind or a set ticks all of it that is
+  listed; **All shown** and **None shown** do the same for the whole list as the search has it;
+- the closed line says how many are chosen.
+
+None is chosen as installed. A chosen unique or set item is said **by its own name** as it drops, before it is
+identified: "Harlequin Crest dropped". (The game shows only the base item until then. With single items
+chosen, the mark itself tells you which one it is.)
+
 Choices are saved at once to `<game folder>\d2rloader\config\rune-marker.toml`. The file can also be edited by
 hand with the game closed; its comments explain every setting, including how to move the menu to another key
 and how to switch the plugin's log off. (The file and the log are named after the plugin's first name, Rune
 Marker. They keep that name so existing settings carry over.)
 
-Runes are marked with an orange rune stone, an orange line and an orange pillar; the other drops with a gold
-star, a gold line and a gold pillar.
+Runes are marked with an orange rune stone, an orange line and an orange pillar; the other drops and the
+unique items with a gold star, a gold line and a gold pillar; set items with a green mark, a green line and
+a green pillar.
 
 ## What to expect
 
@@ -74,6 +90,11 @@ star, a gold line and a gold pillar.
   the plugins it was last played with, and warns ("Requires newer plugin") when an installed one is older.
   This plugin's builds from before its first release carried the number 1.4.2, so the number had to pass that.
 - A drop is announced once per game. Picking it up removes its icon and its pillar.
+- The unique and set items are the ones of game version 3.4 (the list is built into the plugin: 403 unique
+  items that can drop, the eight Rainbow Facets as one entry, and 140 set items). An item is known by its row
+  in the game's table and checked by its base item, so with a mod that puts other items into those tables the
+  changed ones are simply not marked, never marked under a wrong name. Their names are shown in the game's
+  language; the settings file keeps them in English.
 - The pillars are drawn over the game's picture, they are not lights in its world. So a pillar is not hidden
   by a wall in front of it, it is there only for drops near your character (what the game has around you),
   and it is left out where an open inventory or character panel covers its half of the screen, and under the
@@ -100,7 +121,8 @@ unchanged. The version of Drop Marker is in `VERSION.drop-marker`; `VERSION` is 
 
 Three tests run without the game; how to build each is at the top of its file:
 
-- `tests/test_track.cpp` - what is tracked, and the settings file read and written back
+- `tests/test_track.cpp` - what is tracked, the lists of unique and set items, and the settings file read and
+  written back
 - `tests/test_chatline.cpp` - finding and checking the loader's chat routine (needs a real `D2RCore.dll`)
 - `tests/test_trackmenu.cpp` - the menu, drawn and clicked without a screen, and the pillar's look painted to
   pictures
@@ -123,6 +145,8 @@ What was changed here, in November 2026:
 - keys, organs, essences, Worldstone Shards, statues and fragments beside the runes;
 - the pillar of light on a chosen drop (`src/pillars.*`, `src/pillarart.h`), placed by the game's own
   projection of a unit to the screen, the routine under the one CabbyCodes' health bars ask;
+- the unique and set items one by one (`src/named.*`; `src/named_items.h` is made from the game's tables by
+  `tools/make_named_items.ps1`), with CabbyCodes' own marks for those two kinds of item;
 - its own plugin id, settings file, log, version and name.
 
 Drop Marker is not SirCabby's release and he is not responsible for it. Problems with it belong in this

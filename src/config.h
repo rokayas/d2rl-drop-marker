@@ -4,6 +4,7 @@
 #include <string>
 
 #include "log.h"
+#include "named.h"
 
 // The settings, kept in the TOML file D2RLoader owns for this plugin
 // (<scope>/d2rloader/config/cabbycodes.toml; res/cabbycodes.toml is the
@@ -55,6 +56,10 @@ struct Settings {
   // groups (a "pillar_" key each). Vex and every higher rune, no group, unless the file says otherwise.
   uint64_t pillar_runes = 0xFFull << 25;
   uint32_t pillar_groups = 0;
+  // The unique and set items (named.h, track.h): which are tracked and which get a pillar, a key each in the file
+  // ("unique_items", "set_items", "pillar_unique_items", "pillar_set_items"). None unless the file says otherwise.
+  named::Mask track_named[named::kKinds];
+  named::Mask pillar_named[named::kKinds];
   bool item_level = false;           // an item's level after its name (weapons, armor, jewelry, charms, jewels)
   bool monster_health_bars = false;  // a short life bar above every enemy on screen
   bool boss_health_bar = false;      // an act boss's life at the top centre while it is near

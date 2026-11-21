@@ -4,7 +4,7 @@
 // Built by hand:
 //   g++ -std=c++20 -O2 -DD2RCC_RUNES_ONLY=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -Isrc
 //       -Icontrib/D2RLoader-PluginSDK/include -static -o tests/build/test_track.exe
-//       tests/test_track.cpp src/track.cpp src/config.cpp
+//       tests/test_track.cpp src/track.cpp src/config.cpp src/named.cpp
 //   test_track.exe [res/rune-marker.toml]
 #include <cstdio>
 #include <fstream>
@@ -169,7 +169,7 @@ int main(int argc, char** argv) {
     config::Settings d;
     const int keys = config::parse(shipped, &d);
     std::printf("    %s: %d keys\n", argv[1], keys);
-    check(keys == 22, "the shipped file has the 22 keys, all understood");
+    check(keys == 26, "the shipped file has the 26 keys, all understood");
     check(d.enabled && d.map_runes && d.track_runes == track::kAllRunes && d.track_groups == track::kDefaultGroups &&
               d.map_icons && d.rune_message == 1 && d.greeting && d.toggle_key == 0x76 && d.logging &&
               d.pillar_runes == track::kDefaultPillarRunes && d.pillar_groups == track::kDefaultPillarGroups,
@@ -230,6 +230,101 @@ int main(int argc, char** argv) {
               grown.find("pillar_organs = true   # a pillar of light on this group") != std::string::npos,
           "an older file gains the new keys, each with a word on what it is, and keeps what it had");
     check(config::rewrite(grown, g) == grown, "... and is then left as it is");
+    // The unique and set items: none in the shipped file; a choice written into it and read back.
+    check(!d.track_named[named::kUnique].any() && !d.track_named[named::kSetItem].any() &&
+              !d.pillar_named[named::kUnique].any() && !d.pillar_named[named::kSetItem].any(),
+          "the shipped file tracks no unique or set item and gives none a pillar");
+    config::Settings n = d;
+    n.track_named[named::kUnique] = named::from_text(named::kUnique, "harlequin crest; Griffon's Eye;The Stone of Jordan");
+    n.pillar_named[named::kUnique] = named::from_text(named::kUnique, "Griffon's Eye");
+    n.track_named[named::kSetItem] = named::all(named::kSetItem);
+    const std::string named_file = config::rewrite(shipped, n);
+    config::Settings nb;
+    config::parse(named_file, &nb);
+    check(nb.track_named[named::kUnique] == n.track_named[named::kUnique] && nb.track_named[named::kUnique].count() == 3 &&
+              nb.pillar_named[named::kUnique].count() == 1 && nb.track_named[named::kSetItem] == named::all(named::kSetItem) &&
+              !nb.pillar_named[named::kSetItem].any(),
+          "a choice of unique and set items is read back from the rewritten file");
+    check(named_file.find("\nunique_items = \"The Stone of Jordan; Harlequin Crest; Griffon's Eye\"\n") != std::string::npos &&
+              named_file.find("\npillar_unique_items = \"Griffon's Eye\"\n") != std::string::npos &&
+              named_file.find("\nset_items = \"all\"\n") != std::string::npos &&
+              named_file.find("\npillar_set_items = \"none\"\n") != std::string::npos,
+          "... written as names, \"all\" and \"none\"");
+    const std::string named_grown = config::rewrite(grown, n);
+    config::Settings ng;
+    config::parse(named_grown, &ng);
+    check(ng.track_named[named::kUnique] == n.track_named[named::kUnique] &&
+              named_grown.find("unique_items = \"The Stone of Jordan; Harlequin Crest; Griffon's Eye\"   # the tracked unique items") !=
+                  std::string::npos,
+          "a file from before this version gains the four keys");
+  }
+
+  std::printf("7. the unique and set items (named.h)\n");
+  {
+    using namespace named;
+    check(entries(kUnique) == 396 && entries(kSetItem) == 140 && groups(kUnique) == 20 && groups(kSetItem) == 35,
+          "396 unique items by name (403 rows: the eight Rainbow Facets are one) and 140 set items in 35 sets");
+    const auto by_name = [](Kind kind, const char* english) {
+      for (int i = 0; i < entries(kind); ++i)
+        if (std::strcmp(entry(kind, i).item->english, english) == 0) return i;
+      return -1;
+    };
+    const int shako = by_name(kUnique, "Harlequin Crest"), eye = by_name(kUnique, "Griffon's Eye");
+    const int facet = by_name(kUnique, "Rainbow Facet"), guard = by_name(kSetItem, "Tal Rasha's Guardianship");
+    check(shako >= 0 && eye >= 0 && facet >= 0 && guard >= 0, "the items asked for below are in the lists");
+    // An item on the ground: its file index and its base item's code as an Items row has it.
+    check(entry_of(kUnique, 248, track::make_code("uap")) == shako, "file index 248 on a Shako is Harlequin Crest");
+    check(entry_of(kUnique, 248, track::make_code("cap")) == -1, "... on another base item it is not (a mod's table)");
+    check(entry_of(kUnique, 336, track::make_code("ci3")) == eye && entry_of(kUnique, 392, track::make_code("jew")) == facet &&
+              entry_of(kUnique, 399, track::make_code("jew")) == facet,
+          "Griffon's Eye, and two of the Rainbow Facets as the one entry");
+    check(entry_of(kUnique, 200, track::make_code("xap")) == -1 && entry_of(kUnique, -1, 0) == -1 &&
+              entry_of(kUnique, 5000, 0) == -1 && entry_of(kUnique, 295) == -1,
+          "a row that is no item (a heading, a number outside the table, an empty row) is none");
+    check(entry_of(kSetItem, 79, track::make_code("uth")) == guard && entry(kSetItem, guard).group >= 0 &&
+              std::strcmp(group_english(kSetItem, entry(kSetItem, guard).group), "Tal Rasha's Wrappings") == 0,
+          "set item 79 on a Lacquered Plate is Tal Rasha's Guardianship, of Tal Rasha's Wrappings");
+    check(std::strcmp(group_english(kUnique, entry(kUnique, shako).group), "Helms") == 0 &&
+              std::strcmp(group_english(kUnique, entry(kUnique, facet).group), "Jewels") == 0,
+          "a unique item's kind is its base item's");
+    // The settings text.
+    Mask m;
+    check(to_text(kUnique, m) == "none" && to_text(kUnique, all(kUnique)) == "all", "\"none\" and \"all\"");
+    m.set(eye, true);
+    m.set(shako, true);
+    check(to_text(kUnique, m) == "Harlequin Crest; Griffon's Eye", "names apart by semicolons, in the list's order");
+    int unknown = 0;
+    check(from_text(kUnique, "  GRIFFON'S EYE ;harlequin crest;  ", &unknown) == m && unknown == 0, "read back in any case and spacing");
+    check(from_text(kUnique, "Griffon's Eye; No Such Thing; Harlequin Crest", &unknown) == m && unknown == 1,
+          "a name the list does not have is left out and counted");
+    check(from_text(kUnique, "all", &unknown) == all(kUnique) && !from_text(kUnique, "none").any() && !from_text(kUnique, "").any(),
+          "\"all\", \"none\" and nothing");
+    check(from_text(kUnique, "Mindrend") == from_text(kUnique, "Skull Splitter") && from_text(kUnique, "Mindrend").count() == 1,
+          "an item is also found by the game's own key of its name");
+    // The names shown: English until the game's are asked for.
+    check(std::strcmp(display(kUnique, shako), "Harlequin Crest") == 0 && std::strcmp(group_display(kSetItem, 0), "Civerb's Vestments") == 0,
+          "English names before the game's strings are asked");
+    localize([](const char* key, char* out, size_t cap) {
+      if (std::strcmp(key, "Harlequin Crest") == 0) return std::snprintf(out, cap, "Harlekinskrone") > 0;
+      if (std::strcmp(key, "Civerb's Vestments") == 0) return std::snprintf(out, cap, "Civerbs Gewand") > 0;
+      return false;
+    });
+    check(std::strcmp(display(kUnique, shako), "Harlekinskrone") == 0 && std::strcmp(display(kUnique, eye), "Griffon's Eye") == 0 &&
+              std::strcmp(group_display(kSetItem, 0), "Civerbs Gewand") == 0,
+          "the game's names where it has them, English where it has none");
+    check(to_text(kUnique, m) == "Harlequin Crest; Griffon's Eye", "the settings text stays English");
+    // The choices themselves.
+    track::init_named(kUnique, m, Mask{});
+    check(track::named(kUnique, shako) && track::named(kUnique, eye) && !track::named(kUnique, facet) && track::any_named() &&
+              !track::named_pillar(kUnique, shako),
+          "tracked: the two chosen");
+    Mask lit;
+    lit.set(guard, true);
+    track::set_named_pillars(kSetItem, lit);
+    check(track::named_pillar(kSetItem, guard) && !track::named(kSetItem, guard) && track::any_pillars(), "a pillar without tracking");
+    track::init_named(kUnique, Mask{}, Mask{});
+    track::init_named(kSetItem, Mask{}, Mask{});
+    check(!track::any_named(), "none again");
   }
 
   std::printf("%s (%d failed)\n", g_failed ? "FAILED" : "all passed", g_failed);
