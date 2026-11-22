@@ -89,7 +89,11 @@ a green pillar.
 - Version 1.5.0 follows 1.0.0, with nothing between. D2RLoader remembers, for each character, the versions of
   the plugins it was last played with, and warns ("Requires newer plugin") when an installed one is older.
   This plugin's builds from before its first release carried the number 1.4.2, so the number had to pass that.
-- A drop is announced once per game. Picking it up removes its icon and its pillar.
+- A drop is announced once per game. Picking it up removes its icon and its pillar - for every player: since
+  1.6.1 also on the map of a player who joined someone else's TCP/IP game (there the icon used to stay for the
+  rest of the game). Each PC goes by what it sees itself: the icon goes when the item is gone from your
+  character's part of the map (about two screens around it). An item another player picks up farther away than
+  that keeps its icon on your map until you come back near, and loses it then.
 - The unique and set items are the ones of game version 3.4 (the list is built into the plugin: 403 unique
   items that can drop, the eight Rainbow Facets as one entry, and 140 set items). An item is known by its row
   in the game's table and checked by its base item, so with a mod that puts other items into those tables the

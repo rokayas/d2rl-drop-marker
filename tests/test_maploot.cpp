@@ -105,6 +105,44 @@ static void rules() {
   CHECK(on_ground(3) && on_ground(5) && !on_ground(0) && !on_ground(4) && !on_ground(1));
   const Tint gold = item_tint(kItemUnique), green = item_tint(kItemSet), orange = item_tint(kItemRune);
   CHECK(std::fabs(gold.r - 199 / 255.0f) < 1e-6f && green.r == 0.0f && orange.r == 1.0f && orange.b == 0.0f);
+
+  // A mark whose item the client no longer has. On the ground: shown, and a wait that had begun is forgotten.
+  uint64_t since = 0;
+  CHECK(client_fate(Sight::kOnGround, 1000, &since, kGoneAfterMs) == Fate::kShown && since == 0);
+  // Carried: gone at once, whatever came before.
+  CHECK(client_fate(Sight::kHeld, 1000, &since, kGoneAfterMs) == Fate::kGone);
+  // Missing from a room the client is told of: hidden from the first look, gone once that has held for the wait.
+  CHECK(client_fate(Sight::kMissing, 1000, &since, kGoneAfterMs) == Fate::kHidden && since == 1000);
+  CHECK(client_fate(Sight::kMissing, 1200, &since, kGoneAfterMs) == Fate::kHidden && since == 1000);
+  CHECK(client_fate(Sight::kMissing, 2499, &since, kGoneAfterMs) == Fate::kHidden);
+  CHECK(client_fate(Sight::kMissing, 2500, &since, kGoneAfterMs) == Fate::kGone);
+  // Its units came after all (a room that had just come near): shown again, and the wait starts anew the next time.
+  since = 1000;
+  CHECK(client_fate(Sight::kOnGround, 1400, &since, kGoneAfterMs) == Fate::kShown && since == 0);
+  CHECK(client_fate(Sight::kMissing, 5000, &since, kGoneAfterMs) == Fate::kHidden && since == 5000);
+  // Out of the client's rooms (the player walked away, or where its rooms are is not known): nothing is known of the
+  // item, the mark stays and is shown, and a wait that had begun does not go on.
+  CHECK(client_fate(Sight::kOutOfReach, 5200, &since, kGoneAfterMs) == Fate::kShown && since == 0);
+  CHECK(client_fate(Sight::kOutOfReach, 999999, &since, kGoneAfterMs) == Fate::kShown);
+  CHECK(client_fate(Sight::kMissing, 999999, &since, kGoneAfterMs) == Fate::kHidden && since == 999999);
+  // A clock at 0 still starts a wait; a longer wait holds a mark longer.
+  since = 0;
+  CHECK(client_fate(Sight::kMissing, 0, &since, kGoneAfterMs) == Fate::kHidden && since != 0);
+  since = 1000;
+  CHECK(client_fate(Sight::kMissing, 2500, &since, slower_gone(kGoneAfterMs)) == Fate::kHidden);
+  CHECK(client_fate(Sight::kMissing, 4000, &since, slower_gone(kGoneAfterMs)) == Fate::kGone);
+  // The wait doubles each time a mark went too soon, up to its most.
+  CHECK(slower_gone(kGoneAfterMs) == 2 * kGoneAfterMs && slower_gone(slower_gone(kGoneAfterMs)) == 4 * kGoneAfterMs);
+  CHECK(slower_gone(kGoneAfterMaxMs) == kGoneAfterMaxMs && slower_gone(kGoneAfterMaxMs - 1) == kGoneAfterMaxMs);
+  // The client's rooms: a place is in reach inside one of them, of its own level only (another act's rooms may stand
+  // at the same numbers); a room's far edges are the next room's.
+  const ReachRoom reach[] = {{2, 100, 200, 140, 240}, {2, 140, 200, 180, 240}, {3, 180, 200, 220, 240}};
+  CHECK(in_reach(reach, 3, 2, 100, 200) && in_reach(reach, 3, 2, 139, 239) && in_reach(reach, 3, 2, 140, 200));
+  CHECK(in_reach(reach, 3, 2, 179, 220) && !in_reach(reach, 3, 2, 180, 220) && in_reach(reach, 3, 3, 180, 220));
+  CHECK(!in_reach(reach, 3, 2, 99, 200) && !in_reach(reach, 3, 2, 100, 240) && !in_reach(reach, 3, 2, 100, 199));
+  CHECK(!in_reach(reach, 3, 40, 120, 220) && !in_reach(reach, 0, 2, 120, 220) && !in_reach(nullptr, 0, 2, 120, 220));
+  // A place's subtile from its pixels, as the marks keep them: the client's rooms are asked in subtiles.
+  CHECK(mapmarks::subtile_x((120 - 220) * 16, (120 + 220) * 8) == 120 && mapmarks::subtile_y((120 - 220) * 16, (120 + 220) * 8) == 220);
 }
 
 // Where the automap's list draw puts a cell, and its marker draw a cross.

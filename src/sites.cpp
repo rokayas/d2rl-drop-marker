@@ -685,6 +685,11 @@ const Spec kSpecs[kCount] = {
      "24 88 00 00 00 00 E8 ?? ?? ?? ?? 84 C0 74 01 CC 48 89 AC 24 80 00 00 00 48 8B CE 4C 89 64 24 58 4C 89 6C 24 50 "
      "4C 89 74 24 48 4C 89 7C 24 40 E8 ?? ?? ?? ?? 85 C0 0F 84",
      0, 0xD78F0},
+    // A built room's near rooms: the whole getter - the count (+0x40) through the second out pointer, the array (+0x00)
+    // through the first. Every byte is asked for, the two offsets among them: a build that keeps them elsewhere is one
+    // this is not found in.
+    {kRoomNearRooms, "a built room: its near rooms (array, count)", "8B 41 40 41 89 00 48 8B 01 48 89 02 C3", 0,
+     0x2EFDE0},
 };
 
 Result g_results[kCount];

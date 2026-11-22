@@ -178,6 +178,55 @@ constexpr ItemKind item_kind(int32_t quality, bool rune) {
 }
 constexpr bool on_ground(uint32_t mode) { return mode == kItemOnGround || mode == kItemDropping; }
 
+// A mark whose item the client no longer has (a local addition). What takes an item's mark away is the server's word:
+// its pick-up notice and its reads of the ground. A player who joined someone else's TCP/IP game has no server: there
+// a mark is made by the client's sight of the item, and nothing took it away again - it stood for the rest of the game
+// wherever an item had been picked up. So the client is asked too, for every mark, a few times a second:
+// - it has the item on the ground: the mark is shown;
+// - it has the item, off the ground (the local player carries it): the mark goes;
+// - it has no such item, and the mark stands in a room whose units the client is told of (the local player's room and
+//   its near rooms: game.h client_near_rooms): the item is not there. The mark is hidden at once and goes when that
+//   has held for a while - a room that has just come near has its units on the way;
+// - it has no such item, and the mark stands elsewhere: nothing is known, and the mark stays - the item lies where the
+//   client does not look, which is what a mark is for.
+enum class Sight : uint8_t { kOnGround, kHeld, kMissing, kOutOfReach };
+enum class Fate : uint8_t { kShown, kHidden, kGone };
+constexpr uint64_t kGoneAfterMs = 1500;      // how long an item is missing before its mark goes
+constexpr uint64_t kGoneAfterMaxMs = 12000;  // ... at the most (slower_gone)
+// `since`: when the mark's item was first found missing (0: it is not), kept with the mark.
+constexpr Fate client_fate(Sight sight, uint64_t now, uint64_t* since, uint64_t gone_after) {
+  if (sight == Sight::kHeld) return Fate::kGone;
+  if (sight != Sight::kMissing) {
+    *since = 0;
+    return Fate::kShown;
+  }
+  if (*since == 0) {
+    *since = now ? now : 1;
+    return Fate::kHidden;
+  }
+  return now > *since && now - *since >= gone_after ? Fate::kGone : Fate::kHidden;
+}
+// A mark that went as missing and whose item the client then saw again where it lay went too soon (its room's units
+// came later than the wait): the wait is doubled for the rest of the game.
+constexpr uint64_t slower_gone(uint64_t gone_after) {
+  return gone_after * 2 > kGoneAfterMaxMs ? kGoneAfterMaxMs : gone_after * 2;
+}
+// Whether a place (its level, its subtile) is in one of the client's near rooms (each its level and its place in
+// subtiles: [x0, x1) x [y0, y1)). Two acts' rooms may stand at the same numbers, so the level is asked first.
+struct ReachRoom {
+  int level;
+  int32_t x0, y0, x1, y1;
+};
+constexpr bool in_reach(const ReachRoom* rooms, size_t count, int level, int32_t x, int32_t y) {
+  for (size_t i = 0; i < count; ++i)
+    if (rooms[i].level == level && x >= rooms[i].x0 && x < rooms[i].x1 && y >= rooms[i].y0 && y < rooms[i].y1)
+      return true;
+  return false;
+}
+// The pick-up notice takes a mark away a frame or two before the client's own item leaves the ground: for this long
+// after it, the client's sight of that item makes no mark again.
+constexpr uint64_t kPickedQuietMs = 3000;
+
 // The game's text colors for them (_profilehd.json: FontColorGoldYellow, FontColorGreen, FontColorOrange): the cross's
 // tint in legacy graphics.
 struct Tint {
@@ -319,6 +368,7 @@ struct Stats {
   unsigned items = 0;         // items on the ground marked now
   unsigned items_seen = 0;    // ... marked in this game (each once)
   unsigned picked_up = 0;     // ... seen picked up
+  unsigned gone_client = 0;   // ... taken away on the client's word (client_fate): carried, or missing where it lay
   unsigned reads = 0;         // the server's reads of an area's items
   bool icons_loaded = false;  // the plugin's icons were loaded by the game's sprite loader
   const char* icons_why = nullptr;  // ... and if not, why

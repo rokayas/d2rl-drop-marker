@@ -282,6 +282,10 @@ enum Id : int {
   // near the player, with the view in rdi and the unit in rbp (callee-saved) all the while. Its one caller.
   kAutomapMarkerDecision,  // (unit, int* marker, int* name kind) -> whether the game draws a marker for the unit, and
                            // which marker and which name (hooked: the unit draw itself is left to other plugins)
+  // A mark whose item the client no longer has (maploot.cpp): the automap's pass over the units near the player asks
+  // this of the player's room and walks the units of every room it answers - the rooms whose units the client is told.
+  kRoomNearRooms,        // (ActiveRoom, ActiveRoom*** rooms, u32* count): a built room's near rooms, itself among them
+                         // (the array at +0x00, the count at +0x40). Read only: where a room keeps the two
   kCount
 };
 

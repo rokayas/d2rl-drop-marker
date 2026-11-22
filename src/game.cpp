@@ -995,6 +995,37 @@ void* room_built(void* room) {
   return room ? reinterpret_cast<void*>(mem::read_ptr(reinterpret_cast<uintptr_t>(room) + kRoomActive)) : nullptr;
 }
 
+// An ActiveRoom's near rooms, as its getter (sites::kRoomNearRooms) hands them out: the array of ActiveRooms at +0x00,
+// how many at +0x40. The room itself is one of them.
+constexpr uintptr_t kActiveRoomNear = 0x00;
+constexpr uintptr_t kActiveRoomNearCount = 0x40;
+constexpr uint32_t kMaxNearRooms = 64;
+
+bool has_near_rooms() { return sites::found(sites::kRoomNearRooms); }
+
+size_t client_near_rooms(NearRoom* out, size_t cap) {
+  if (!out || !has_near_rooms()) return 0;
+  Unit* me = local_client_player();
+  const uintptr_t path = me ? mem::read_ptr(reinterpret_cast<uintptr_t>(me) + kUnitPath) : 0;
+  const uintptr_t active = path ? mem::read_ptr(path + kPathRoom) : 0;
+  const uintptr_t rooms = active ? mem::read_ptr(active + kActiveRoomNear) : 0;
+  uint32_t count = 0;
+  if (!rooms || !mem::read_safe(active + kActiveRoomNearCount, &count) || count == 0 || count > kMaxNearRooms) return 0;
+  size_t n = 0;
+  bool own = false;
+  for (uint32_t i = 0; i < count; ++i) {
+    const uintptr_t room = mem::read_ptr(rooms + static_cast<uintptr_t>(i) * 8);
+    const uintptr_t drlg = room ? mem::read_ptr(room + kActiveRoomDrlgRoom) : 0;
+    NearRoom r;
+    // One that does not read as a room: the list is not what it is taken for, and nothing is told.
+    if (!drlg || n == cap || !room_tiles(reinterpret_cast<void*>(drlg), &r.x, &r.y, &r.w, &r.h)) return 0;
+    r.level = level_id_of(reinterpret_cast<void*>(mem::read_ptr(drlg + kRoomLevel)));
+    own = own || room == active;
+    out[n++] = r;
+  }
+  return own ? n : 0;
+}
+
 uint8_t game_bank(void* game) {
   uint8_t bank = 0;
   return game && mem::read_safe(reinterpret_cast<uintptr_t>(game) + kGameDataCtx, &bank) ? bank : 0;

@@ -90,6 +90,9 @@ struct ItemMark {
   int32_t px = 0, py = 0;
   uint32_t cls = UINT32_MAX;  // its Items row, when known (the rune drop message names the rune by it)
   int32_t named = -1;         // a unique or set item's file index: its row in the game's table of them
+  uint64_t missing_since = 0;  // when the client was first found without it, in a room it is told of (0: it is not)
+  bool server_kept = false;    // the server's read found it on the ground after its mark had gone as missing: the
+                               // server's word stands, and the client's missing it takes the mark away no more
 };
 // An area's objects or items as the server read them, waiting for the automap's next draw.
 struct Pending {
@@ -155,6 +158,17 @@ struct Fleeting {
 std::unordered_map<uint32_t, Fleeting> g_fleeting;
 std::unordered_set<uint64_t> g_fleeting_places;  // where the server's reads found one, in this game (a count)
 uint32_t g_draw = 0;  // the automap's draws: the local player's own calls
+// A mark whose item the client no longer has (maploot.h client_fate): the client is asked this often; the items whose
+// mark went as missing, each with where it lay (one seen there again went too soon); and when the pick-up notice took
+// an item's mark.
+constexpr uint64_t kAskMs = 200;
+constexpr size_t kMaxReach = 64, kMaxRemembered = 512;
+uint64_t g_asked_at = 0;
+uint64_t g_gone_after = kGoneAfterMs;
+std::unordered_map<uint32_t, uint64_t> g_went_missing;
+std::unordered_map<uint32_t, uint64_t> g_picked_at;
+bool g_reach_told = false;
+volatile LONG g_client_gone_logged = 0, g_back_logged = 0, g_reach_logged = 0, g_stat_client_gone = 0;
 
 const Tables* tables_of(uint8_t bank) {
   return bank >= 1 && bank < kBanks && g_banks[bank].ready ? &g_banks[bank] : nullptr;
@@ -505,13 +519,57 @@ void say_item(uint32_t id, uint8_t bank, int level, int32_t px, int32_t py, uint
        chatline::available() ? "the game's chat" : "on screen");
 }
 
-void note_item(uint32_t id, const ItemMark& m, const char* from) {
-  if (g_items.size() >= kMaxItemMarks && !g_items.count(id)) {
+// `by_client`: the client's own sight of the item on the ground, else the server's read of it.
+void note_item(uint32_t id, const ItemMark& m, const char* from, bool by_client) {
+  uint64_t missing_since = 0;
+  bool server_kept = false;
+  const auto had = g_items.find(id);
+  if (by_client) {
+    // The pick-up notice has just taken its mark: the client's item is about to leave the ground.
+    if (const auto picked = g_picked_at.find(id); picked != g_picked_at.end()) {
+      if (GetTickCount64() - picked->second < kPickedQuietMs) return;
+      g_picked_at.erase(picked);
+    }
+    // One whose mark went as missing, seen again where it lay: its room's units came later than the wait.
+    if (const auto went = g_went_missing.find(id); went != g_went_missing.end()) {
+      if (went->second == place_key(m.level, m.px, m.py)) {
+        g_gone_after = slower_gone(g_gone_after);
+        if (log_first(&g_back_logged, kLogFirst))
+          logf("items: an item (level %d) whose icon went as no longer there is on the ground where it lay - the "
+               "icon is back, and an item is now missing for %llu ms before its icon goes",
+               m.level, static_cast<unsigned long long>(g_gone_after));
+      }
+      g_went_missing.erase(went);
+    }
+  } else {
+    // The server's read says nothing of what the client has: an item it is found without stays so.
+    if (had != g_items.end()) {
+      missing_since = had->second.missing_since;
+      server_kept = had->second.server_kept;
+    }
+    // ... but one whose mark went as missing, and that the server still has on the ground where it lay, is there: the
+    // client is not told of that room's items after all (only where the server is: the host's PC, a game of one).
+    if (const auto went = g_went_missing.find(id); went != g_went_missing.end()) {
+      if (went->second == place_key(m.level, m.px, m.py)) {
+        server_kept = true;
+        missing_since = 0;
+        if (log_first(&g_back_logged, kLogFirst))
+          logf("items: an item (level %d) whose icon went as no longer there is on the ground for the server where it "
+               "lay - the icon is back and stays until the server says the item is gone",
+               m.level);
+      }
+      g_went_missing.erase(went);
+    }
+  }
+  if (g_items.size() >= kMaxItemMarks && had == g_items.end()) {
     if (log_once(&g_full_warned, LogLevel::kWarning))
       log_warn("items: %zu items on the map at once - no more are kept", kMaxItemMarks);
     return;
   }
-  g_items[id] = m;
+  ItemMark& kept = g_items[id];
+  kept = m;
+  kept.missing_since = missing_since;
+  kept.server_kept = server_kept;
   // Said at every sight of it, which says it once (say_item): also the first time after the menu made it a tracked one.
   if (m.kind != kItemNone && item_on(static_cast<ItemKind>(m.kind)))
     say_item(id, m.bank, m.level, m.px, m.py, m.cls, m.kind, m.named, from);
@@ -545,7 +603,10 @@ void take_pending() {
   picked.swap(g_picked);
   InterlockedExchange(&g_pending_waiting, 0);
   LeaveCriticalSection(&g_cs);
+  const uint64_t picked_at = GetTickCount64();
+  if (g_picked_at.size() >= kMaxRemembered) g_picked_at.clear();
   for (const uint32_t id : picked) {
+    g_picked_at[id] = picked_at;
     const auto it = g_items.find(id);
     if (it == g_items.end()) continue;
     InterlockedIncrement(&g_stat_picked);
@@ -622,7 +683,7 @@ void take_pending() {
       m.px = s.px;
       m.py = s.py;
       m.cls = s.cls;
-      note_item(s.id, m, "read from the server's rooms of the area");
+      note_item(s.id, m, "read from the server's rooms of the area", false);
     }
   }
 }
@@ -670,7 +731,54 @@ void seen(Unit* u, uint32_t type) {
   if (k == kItemUnique || k == kItemSet) m.named = game::item_file_index(u);
   m.level = game::unit_level_id(u);
   if (m.level <= 0 || !game::unit_pixels(u, &m.px, &m.py)) return;
-  note_item(id, m, "seen by the client");
+  note_item(id, m, "seen by the client", true);
+}
+
+// The client's own word on every mark (maploot.h client_fate), a few times a second: the marks whose item it no longer
+// has on the ground go - at once when the local player carries the item, after a wait when the item is missing from a
+// room whose units the client is told of. This is what takes a mark away where no server is (a joined TCP/IP game).
+void ask_client(uint64_t now) {
+  if (g_items.empty() || now - g_asked_at < kAskMs) return;
+  g_asked_at = now;
+  // The rooms the client is told of, in subtiles; taken as told only when the local player stands in one of them.
+  ReachRoom reach[kMaxReach];
+  game::NearRoom near_rooms[kMaxReach];
+  const size_t rooms = game::client_near_rooms(near_rooms, kMaxReach);
+  for (size_t i = 0; i < rooms; ++i)
+    reach[i] = ReachRoom{near_rooms[i].level, near_rooms[i].x * 5, near_rooms[i].y * 5,
+                         (near_rooms[i].x + near_rooms[i].w) * 5, (near_rooms[i].y + near_rooms[i].h) * 5};
+  Unit* me = rooms ? game::local_client_player() : nullptr;
+  int32_t mx = 0, my = 0;
+  const bool told = me && game::unit_pixels(me, &mx, &my) &&
+                    in_reach(reach, rooms, game::unit_level_id(me), mapmarks::subtile_x(mx, my), mapmarks::subtile_y(mx, my));
+  if (told != g_reach_told && log_first(&g_reach_logged, kLogFirst))
+    logf("items: the rooms this PC is told the items of are %s (%zu rooms read)",
+         told ? "known: the character's room and the rooms next to it" : "not known just now - no icon goes as missing",
+         rooms);
+  g_reach_told = told;
+  for (auto it = g_items.begin(); it != g_items.end();) {
+    ItemMark& m = it->second;
+    Unit* u = game::client_unit(it->first, game::kItem);
+    const Sight sight = u ? (on_ground(game::unit_mode(u)) ? Sight::kOnGround : Sight::kHeld)
+                        : told && !m.server_kept &&
+                                  in_reach(reach, rooms, m.level, mapmarks::subtile_x(m.px, m.py),
+                                           mapmarks::subtile_y(m.px, m.py))
+                              ? Sight::kMissing
+                              : Sight::kOutOfReach;
+    if (client_fate(sight, now, &m.missing_since, g_gone_after) != Fate::kGone) {
+      ++it;
+      continue;
+    }
+    if (sight == Sight::kMissing) {
+      if (g_went_missing.size() >= kMaxRemembered) g_went_missing.clear();
+      g_went_missing[it->first] = place_key(m.level, m.px, m.py);
+    }
+    InterlockedIncrement(&g_stat_client_gone);
+    if (log_first(&g_client_gone_logged, kLogFirst))
+      logf("items: an item (level %d) is no longer on the ground as this PC sees it (%s) - its icon goes", m.level,
+           sight == Sight::kHeld ? "the character carries it" : "it is gone from a room this PC is told the items of");
+    it = g_items.erase(it);
+  }
 }
 
 // The level's automap layer, from the level's record: asked once a level a draw at the most.
@@ -740,6 +848,7 @@ void draw_all(const void* view) {
   const void* crosses = icons ? nullptr : game::map_cross_sprite(&cross_w, &cross_h);
   for (const auto& [id, m] : g_items) {
     if (!item_on(static_cast<ItemKind>(m.kind)) || layer_of(m.bank, m.level, &layers) != layer) continue;
+    if (m.missing_since) continue;  // the client is without it where it would have it (ask_client): about to go
     if (!tracked(tables_of(m.bank), m.kind, m.cls, m.named)) continue;  // a drop the user does not track now
     // ... or tracks without its icon (the menu's "Minimap icon" switch; the marks themselves are kept, so the icons
     // are back the moment it is switched on).
@@ -851,6 +960,12 @@ void bind(bool ui_thread) {
   InterlockedExchange(&g_chests_ok, why ? 0 : 1);
   InterlockedExchange(&g_items_ok, why ? 0 : 1);
   logf("map: chests %s, unique, set and rune items %s", why ? why : "ready", why ? why : "ready");
+  if (!why)
+    logf("map: an item's icon goes when this PC no longer has the item on the ground: %s",
+         game::has_near_rooms() ? "one the character carries, and one gone from the character's room or a room next to "
+                                  "it (the rooms the automap's pass walks)"
+                                : "one the character carries only - a room's near rooms are not kept where expected, "
+                                  "so an item another player picks up is not told from one out of sight");
 }
 
 bool chests_ready() { return g_chests_ok != 0; }
@@ -1060,6 +1175,11 @@ void unit_drawn(Unit* unit, const void* view) {
     g_chests.clear();
     g_items.clear();
     g_items_counted.clear();
+    g_went_missing.clear();
+    g_picked_at.clear();
+    g_gone_after = kGoneAfterMs;
+    g_asked_at = 0;
+    g_reach_told = false;
     g_fleeting.clear();
     g_fleeting_places.clear();
   }
@@ -1068,6 +1188,7 @@ void unit_drawn(Unit* unit, const void* view) {
     seen(unit, type);
   } else if (type == game::kPlayer && game::is_local_player(unit)) {
     if (g_pending_waiting) take_pending();
+    if (items) ask_client(GetTickCount64());
     draw_all(view);
     InterlockedExchange(&g_stat_chests, static_cast<LONG>(g_chests.size()));
     InterlockedExchange(&g_stat_items, static_cast<LONG>(g_items.size()));
@@ -1094,7 +1215,8 @@ void game_left() {
     LeaveCriticalSection(&g_cs);
   }
   for (volatile LONG* v : {&g_stat_items_seen, &g_stat_picked, &g_stat_reads, &g_stat_chests, &g_stat_open, &g_stat_items,
-                           &g_stat_gone, &g_stat_fleeting, &g_stat_fleeting_near})
+                           &g_stat_gone, &g_stat_fleeting, &g_stat_fleeting_near, &g_stat_client_gone,
+                           &g_client_gone_logged, &g_back_logged, &g_reach_logged})
     InterlockedExchange(v, 0);
 }
 
@@ -1108,6 +1230,7 @@ Stats stats() {
   s.items = static_cast<unsigned>(g_stat_items);
   s.items_seen = static_cast<unsigned>(g_stat_items_seen);
   s.picked_up = static_cast<unsigned>(g_stat_picked);
+  s.gone_client = static_cast<unsigned>(g_stat_client_gone);
   s.reads = static_cast<unsigned>(g_stat_reads);
   s.icons_loaded = g_icons_loaded != 0;
   s.icons_why = g_icons_why;

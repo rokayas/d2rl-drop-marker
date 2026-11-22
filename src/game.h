@@ -245,6 +245,16 @@ int level_id_of(void* level);
 void* level_drlg(void* level);
 void* room_built(void* room);
 uint8_t game_bank(void* game);
+// The rooms whose units the client is told of (the client's thread): the local player's room and its near rooms, as
+// the automap's pass over the units near the player walks them (0xD2620 asks the room's near list, 0x2EFDE0, and draws
+// every unit of each room in it), each by its level and its DRLG room's place in tiles. How many were written; 0 when
+// they cannot be told (no player or no room yet, the list not kept where expected, the room not in its own list).
+struct NearRoom {
+  int level = -1;
+  int32_t x = 0, y = 0, w = 0, h = 0;
+};
+bool has_near_rooms();
+size_t client_near_rooms(NearRoom* out, size_t cap);
 
 // Town portals across acts (server thread, inside the portal hooks). The game record keeps an act it has made at
 // its acts ({acts, count}; an act is made when a player first enters it, by the routine the act change calls).
